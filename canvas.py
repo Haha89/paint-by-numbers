@@ -152,7 +152,7 @@ class Canvas:
 
 
 if __name__ == "__main__":
-    path = "./inputs/isengard.jpg"
+    path = "./inputs/chirico.jpg"
     nb_colors = 25
     main_canvas = Canvas(path, nb_colors, plot=True)
     main_canvas.generate()
