@@ -39,6 +39,5 @@ run `python run.py [path] [nb_color] [plot] [save] [pixel_size]` with:
 ![alt text](https://github.com/Haha89/paint-by-number/blob/master/outputs/chirico-colormap.png "Colormap")
 
 ### Next Steps:
-
 - Better positioning of the label in each region
-- Better contour filtering to remove small regions
+- Better contour filtering to remove small regions or regions almost fully included in another one
