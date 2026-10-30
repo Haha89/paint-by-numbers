@@ -1,4 +1,11 @@
 # paint-by-numbers
+
+[![Python](https://img.shields.io/badge/python-3.12%2B-blue?logo=python&logoColor=white)](https://www.python.org/)
+[![uv](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json)](https://github.com/astral-sh/uv)
+[![OpenCV](https://img.shields.io/badge/OpenCV-5C3EE8?logo=opencv&logoColor=white)](https://opencv.org/)
+[![scikit-learn](https://img.shields.io/badge/scikit--learn-F7931E?logo=scikitlearn&logoColor=white)](https://scikit-learn.org/)
+[![License: GPL v3](https://img.shields.io/badge/license-GPLv3-blue)](LICENSE)
+
 A quick Python tool to transform any picture in a paint-by-number canvas, using opencv
 
 # How it works

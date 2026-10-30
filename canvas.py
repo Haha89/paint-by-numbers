@@ -46,6 +46,8 @@ class Canvas:
 
     def __init__(self, path_pic, nb_color, pixel_size=4000, denoise_size=1500, min_region_ratio=1e-4,
                  min_width_ratio=1 / 250, smoothing_ratio=1 / 1000, nb_samples=1000):
+        if not 1 <= nb_color <= 256:
+            raise ValueError("nb_color must be between 1 and 256")
         path_pic = Path(path_pic)
         src = cv2.imread(str(path_pic))
         if src is None:
@@ -86,19 +88,26 @@ class Canvas:
         self.canvas = canvas
         return canvas
 
+    @staticmethod
+    def vote(labels, nb_color, score_function):
+        """Each pixel takes the color with the highest score, score_function maps a color mask to its scores"""
+        best, voted = None, None
+        for ind in range(nb_color):
+            score = score_function(cv2.compare(labels, ind, cv2.CMP_EQ))
+            if best is None:
+                best, voted = score, np.zeros(score.shape, dtype=np.uint8)
+                continue
+            better = score > best
+            np.copyto(best, score, where=better)
+            np.copyto(voted, ind, where=better)
+        return voted
+
     def smooth_labels(self, labels, nb_color):
         """Smooth the borders: each pixel takes the color most present around it, weighted by a gaussian"""
         sigma = self.smoothing_ratio * max(labels.shape)
         if sigma <= 0:
             return labels
-        best = np.full(labels.shape, -1, dtype=np.float32)
-        smoothed = labels.copy()
-        for ind in range(nb_color):
-            score = cv2.GaussianBlur((labels == ind).astype(np.float32), (0, 0), sigma)
-            better = score > best
-            best[better] = score[better]
-            smoothed[better] = ind
-        return smoothed
+        return self.vote(labels, nb_color, lambda mask: cv2.GaussianBlur(mask, (0, 0), sigma))
 
     def merge_small_regions(self, labels, nb_color, max_iter=3):
         """Give the regions too small or too thin to be painted the color of the closest large region
@@ -137,7 +146,7 @@ class Canvas:
         offsets = np.zeros(nb_color, dtype=np.int32)
         region_colors, region_stats = [], []
         for ind in range(nb_color):
-            nb_comp, components, stats, _ = cv2.connectedComponentsWithStats((labels == ind).view(np.uint8),
+            nb_comp, components, stats, _ = cv2.connectedComponentsWithStats(cv2.compare(labels, ind, cv2.CMP_EQ),
                                                                              connectivity=4)
             # Each pixel has a single color, so it only receives the id of its own component
             ids += components
@@ -187,15 +196,17 @@ class Canvas:
         cv2.putText(canvas, text, origin, font, scale, self.label_color, thickness, cv2.LINE_AA)
 
     @staticmethod
-    def resize(picture, size):
-        """Resize the picture so that its largest dimension matches size, respecting the picture ratio"""
-        (height, width) = picture.shape[:2]
+    def target_dim(shape, size):
+        """Returns the (width, height) whose largest dimension matches size, respecting the picture ratio"""
+        (height, width) = shape[:2]
         if height > width:  # portrait mode
-            dim = (int(width * size / float(height)), size)
-        else:
-            dim = (size, int(height * size / float(width)))
-        interpolation = cv2.INTER_AREA if size < max(height, width) else cv2.INTER_CUBIC
-        return cv2.resize(picture, dim, interpolation=interpolation)
+            return int(width * size / float(height)), size
+        return size, int(height * size / float(width))
+
+    def resize(self, picture, size):
+        """Resize the picture so that its largest dimension matches size, respecting the picture ratio"""
+        interpolation = cv2.INTER_AREA if size < max(picture.shape[:2]) else cv2.INTER_CUBIC
+        return cv2.resize(picture, self.target_dim(picture.shape, size), interpolation=interpolation)
 
     @staticmethod
     def denoise(picture):
@@ -206,7 +217,9 @@ class Canvas:
     @staticmethod
     def morphology(picture):
         """Morphomat operations, closing then opening"""
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (10, 10))
+        # Kernel of 10 pxl for a 4000 pxl picture
+        size = max(3, round(max(picture.shape[:2]) / 400))
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (size, size))
         clean_pic = cv2.morphologyEx(picture, cv2.MORPH_CLOSE, kernel, borderType=cv2.BORDER_REPLICATE)
         return cv2.morphologyEx(clean_pic, cv2.MORPH_OPEN, kernel, borderType=cv2.BORDER_REPLICATE)
 
@@ -221,7 +234,8 @@ class Canvas:
         rng = np.random.default_rng(0)
         sample = image_array[rng.choice(len(image_array), min(self.nb_samples, len(image_array)), replace=False)]
         kmeans = KMeans(n_clusters=self.nb_color, random_state=42).fit(sample)
-        labels = kmeans.predict(image_array).reshape(height, width)
+        # uint8 labels are lighter to process, and enough for up to 256 colors
+        labels = kmeans.predict(image_array).reshape(height, width).astype(np.uint8)
         centers = kmeans.cluster_centers_.astype(np.float32).reshape(1, -1, dimension)
         colors = cv2.cvtColor(centers, cv2.COLOR_Lab2RGB).reshape(-1, dimension)
         colors = np.clip(np.rint(colors * 255), 0, 255).astype(np.uint8)
