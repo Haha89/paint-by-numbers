@@ -46,14 +46,12 @@ Example: `uv run run.py inputs/chirico.jpg 20 --title "Place d'Italie" --subtitl
 
 ### Result:
 
-#### De Chirico, Place d'Italie, 1922
-![De Chirico, Place d'Italie, 1922](inputs/chirico.jpg "De Chirico, Place d'Italie, 1922")
-#### Expected result (20 colors requested, 18 kept after merging the closest ones)
-![Expected result](outputs/chirico-result.png "Expected result")
-#### Canvas
-![Canvas](outputs/chirico-canvas.png "Canvas")
-#### Colormap
-![Colormap](outputs/chirico-colormap.png "Colormap")
+#### De Chirico, Place d'Italie, 1922 (20 colors requested, 18 kept after merging the closest ones)
+![De Chirico, Place d'Italie: source, expected result and colormap](outputs/chirico-overview.png)
+![De Chirico, Place d'Italie: canvas](outputs/chirico-canvas.png)
+
+#### Leonardo da Vinci, Mona Lisa (20 colors requested, 19 kept)
+![Mona Lisa: source, expected result and colormap](outputs/joconde-overview.png)
 
 #### Printable PDFs
 Palette page, then vector canvas page:
