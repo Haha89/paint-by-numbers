@@ -47,14 +47,20 @@ Example: `uv run run.py inputs/chirico.jpg 20 --title "Place d'Italie" --subtitl
 ### Result:
 
 #### De Chirico, Place d'Italie, 1922
-![alt text](https://github.com/Haha89/paint-by-number/blob/master/inputs/chirico.jpg "De Chirico, Place d'Italie, 1922")
-#### Expected result (20 colors)
-![alt text](https://github.com/Haha89/paint-by-number/blob/master/outputs/chirico-result.png "Expected result")
+![De Chirico, Place d'Italie, 1922](inputs/chirico.jpg "De Chirico, Place d'Italie, 1922")
+#### Expected result (20 colors requested, 18 kept after merging the closest ones)
+![Expected result](outputs/chirico-result.png "Expected result")
 #### Canvas
-![alt text](https://github.com/Haha89/paint-by-number/blob/master/outputs/chirico-canvas.png "Canvas")
+![Canvas](outputs/chirico-canvas.png "Canvas")
 #### Colormap
-![alt text](https://github.com/Haha89/paint-by-number/blob/master/outputs/chirico-colormap.png "Colormap")
+![Colormap](outputs/chirico-colormap.png "Colormap")
+
+#### Printable PDFs
+Palette page, then vector canvas page:
+- [Place d'Italie, De Chirico](outputs/chirico.pdf)
+- [Mona Lisa, Leonardo da Vinci](outputs/joconde.pdf)
+- [Paysage](outputs/paysage.pdf)
 
 ### Next Steps:
-- Better positioning of the label in each region
-- Better contour filtering to remove small regions or regions almost fully included in another one
+- Repeat the label in large or elongated regions
+- Edge-preserving smoothing (mean-shift or bilateral filter) instead of blur and morphomat
