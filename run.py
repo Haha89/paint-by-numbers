@@ -1,26 +1,25 @@
 # -*- coding: utf-8 -*-
 
-import os
-import sys
+import argparse
 
 from canvas import Canvas
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Transform a picture in a paint-by-number canvas")
+    parser.add_argument("path", help="path of the source picture")
+    parser.add_argument("nb_color", type=int, help="number of colors you want in the canvas (10 to 20)")
+    parser.add_argument("--plot", action="store_true", help="show the results in plots")
+    parser.add_argument("--no-save", dest="save", action="store_false",
+                        help="do not save the results in the output folder")
+    parser.add_argument("--pixel-size", type=int, default=4000,
+                        help="size in pixel of the largest dimension of the output canvas (default 4000)")
+    parser.add_argument("--output-dir", default="./outputs", help="folder where results are saved (default ./outputs)")
+    args = parser.parse_args()
 
-    if len(sys.argv) < 3:
-        raise SyntaxError("Insufficient arguments. Please provide :\n"
-                          "  -path: path of the source picture \n"
-                          "  -nb_color : number of colors you want in the canvas (10 to 20)\n"
-                          "  -plot: optional, boolean to set to True if you want to see some plots. Default False\n"
-                          "  -save: optional, boolean to set to True if you want to save results in the ./outputs folder. Default True\n"
-                          "  -pixel_size: optional, interger, size in pixel of the largest dimension of the output canvas (default 4000)\n")
-
-    if len(sys.argv) != 3:
-        CANVAS = Canvas(os.path.abspath(sys.argv[1]), int(sys.argv[2]), *sys.argv[3:])
-    else:
-
-        CANVAS = Canvas(os.path.abspath(sys.argv[1]), int(sys.argv[2]))
-
+    CANVAS = Canvas(args.path, args.nb_color, pixel_size=args.pixel_size)
     CANVAS.generate()
-    CANVAS.display_colormap()
+    if args.save:
+        CANVAS.save(args.output_dir)
+    if args.plot:
+        CANVAS.plot()
     print("Canvas generated")

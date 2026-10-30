@@ -22,13 +22,14 @@ The definition of the class Canvas in the python script `canvas.py`
 Dependencies are managed with [uv](https://docs.astral.sh/uv/). Install them with `uv sync`.
 
 ### Execution:
-run `uv run run.py [path] [nb_color] [plot] [save] [pixel_size]` with:
+run `uv run run.py path nb_color [--plot] [--no-save] [--pixel-size N] [--output-dir DIR]` with:
 
   **path**: path of the source picture  
   **nb_color** : number of colors you want in the canvas (10 to 20)  
-  **plot**: optional, boolean to set to True if you want to see some plots. Default False  
-  **save**: optional, boolean to set to True if you want to save results in the `./outputs` folder. Default True  
-  **pixel_size**: optional, interger, size in pixel of the largest dimension of the output canvas (default 4000)
+  **--plot**: optional, show the results in plots  
+  **--no-save**: optional, do not save the results in the output folder  
+  **--pixel-size**: optional, integer, size in pixel of the largest dimension of the output canvas (default 4000)  
+  **--output-dir**: optional, folder where results are saved (default `./outputs`)
 
 ### Result:
 

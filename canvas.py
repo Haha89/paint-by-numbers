@@ -2,13 +2,12 @@
 # -*- coding: utf-8 -*-
 """Script to generate a canvas out of a picture"""
 
-import ntpath
+from pathlib import Path
 
 import cv2
 import matplotlib.pyplot as plt
 import numpy as np
 from sklearn.cluster import KMeans
-from sklearn.utils import shuffle
 
 
 class Canvas:
@@ -17,143 +16,156 @@ class Canvas:
 
     Parameters
     ----------
-    path_pic : str
+    path_pic : str or Path
         the source picture you want to transform in a canvas
-    nb_color :
+    nb_color : int
         number of colors you want to keep
-    plot : boolean, optional
-        Wether you want to plot results or not
-    save : boolean, optional
-        Wether you want to save results or not
-    pixel_size: interger, optional, default 4000
-        size in pxl of the largest dimension of the ouptut canvas    
+    pixel_size : int, optional, default 4000
+        size in pxl of the largest dimension of the output canvas
+    denoise_size : int, optional, default 1500
+        size in pxl of the largest dimension used for denoising (the costliest step)
+    max_contours : int, optional, default 500
+        number of regions kept, largest first
+    min_region_size : int, optional, default 10
+        minimal width and height in pxl of a region bounding box
+    min_region_area : int, optional, default 100
+        minimal area in pxl of a region
+    nb_samples : int, optional, default 1000
+        number of pixels sampled to fit the K-mean
     """
 
-    def __init__(self, path_pic, nb_color, plot=False, save=True, pixel_size=4000):
-        self.namefile = ntpath.basename(path_pic).split(".")[0]
-        self.src = cv2.cvtColor(cv2.imread(path_pic), cv2.COLOR_BGR2RGB)
+    def __init__(self, path_pic, nb_color, pixel_size=4000, denoise_size=1500, max_contours=500,
+                 min_region_size=10, min_region_area=100, nb_samples=1000):
+        path_pic = Path(path_pic)
+        src = cv2.imread(str(path_pic))
+        if src is None:
+            raise FileNotFoundError(f"Cannot read picture: {path_pic}")
+        self.namefile = path_pic.stem
+        self.src = cv2.cvtColor(src, cv2.COLOR_BGR2RGB)
         self.nb_color = nb_color
-        self.plot = plot
-        self.save = save
         self.tar_width = pixel_size
+        self.denoise_size = denoise_size
+        self.max_contours = max_contours
+        self.min_region_size = min_region_size
+        self.min_region_area = min_region_area
+        self.nb_samples = nb_samples
+        self.quantified_image = None
+        self.canvas = None
         self.colormap = []
 
     def generate(self):
-        """Main function"""
-        im_source = self.resize()
-        clean_img = self.cleaning(im_source)
-        clean_img = np.array(clean_img, dtype="uint8") / 255
-        quantified_image, colors = self.quantification(clean_img)
-        canvas = np.zeros(quantified_image.shape[:3], dtype="uint8")
-        labels, contours = [], []
-        for ind, color in enumerate(colors):
-            self.colormap.append([int(c * 255) for c in color])
-            mask = cv2.inRange(quantified_image, color, color)
-            cnts = cv2.findContours(mask, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
-            cnts = cnts[0] if len(cnts) == 2 else cnts[1]
+        """Main function, computes the expected result, the canvas and the colormap"""
+        # Denoising is done before upscaling to the target size, as its cost grows with the number of pixels
+        denoise_width = min(self.denoise_size, self.tar_width, max(self.src.shape[:2]))
+        denoised = self.denoise(self.resize(self.src, denoise_width))
+        clean_img = self.morphology(self.resize(denoised, self.tar_width))
+        labels, colors = self.quantification(clean_img)
+        self.colormap = colors.tolist()
+        self.quantified_image = colors[labels]
 
+        contours = []
+        for ind in range(len(colors)):
+            mask = (labels == ind).astype(np.uint8)
+            cnts, _ = cv2.findContours(mask, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
             for contour in cnts:
                 _, _, width_ctr, height_ctr = cv2.boundingRect(contour)
-                if width_ctr > 10 and height_ctr > 10 and cv2.contourArea(contour, True) < -100:  #
-                    contours.append({'contour': contour, 'area': abs(cv2.contourArea(contour, True)),
-                                     "x": contour[0][0][0], "y": contour[0][0][1] + 15, "label": str(int(ind + 1))})
+                if width_ctr <= self.min_region_size or height_ctr <= self.min_region_size:
+                    continue
+                # Oriented area is negative for outer contours
+                area = -cv2.contourArea(contour, True)
+                if area > self.min_region_area:
+                    contours.append({"contour": contour, "area": area, "x": contour[0][0][0],
+                                     "y": contour[0][0][1] + 15, "label": str(ind + 1)})
 
-        # Sort and keep top 1000 contours by size
-        sorted_contours = sorted(contours, key=lambda d: d["area"], reverse=True)[0:500]
-        cv2.drawContours(canvas, [c['contour'] for c in sorted_contours], -1, (255, 255, 255), 1)
-        # self.plot_figure(canvas, "Smoothed")
-        canvas = self.clean_2(canvas)
-        canvas = 255 - canvas  # cv2.bitwise_not(canvas)
-        # canvas = cv2.resize(canvas, (0, 0), fx=0.45, fy=0.45)
-        # canvas = cv2.threshold(canvas, 254, 255, cv2.THRESH_BINARY)[1]
-        # Add all labels on canvas
+        # Keep the largest contours only
+        sorted_contours = sorted(contours, key=lambda d: d["area"], reverse=True)[:self.max_contours]
+        canvas = np.zeros(labels.shape, dtype=np.uint8)
+        cv2.drawContours(canvas, [c["contour"] for c in sorted_contours], -1, 255, 1)
+        canvas = 255 - self.thin_contours(canvas)
         for cont in sorted_contours:
-            cv2.putText(canvas, cont['label'], (cont['x'], cont['y']), cv2.FONT_HERSHEY_SIMPLEX, 0.5, 0, 1)
-
-        if self.plot:
-            self.plot_figure(quantified_image, "Expected Result")
-            self.plot_figure(canvas, "Canvas")
-
-        if self.save:
-            cv2.imwrite(f"./outputs/{self.namefile}-result.png",
-                        cv2.cvtColor(quantified_image.astype('float32') * 255, cv2.COLOR_BGR2RGB))
-            cv2.imwrite(f"./outputs/{self.namefile}-canvas.png", canvas)
+            cv2.putText(canvas, cont["label"], (cont["x"], cont["y"]), cv2.FONT_HERSHEY_SIMPLEX, 0.5, 0, 1)
+        self.canvas = canvas
         return canvas
 
-    def resize(self):
-        """Resize the image to match the target width and respect the picture ratio"""
-        (height, width) = self.src.shape[:2]
+    @staticmethod
+    def resize(picture, size):
+        """Resize the picture so that its largest dimension matches size, respecting the picture ratio"""
+        (height, width) = picture.shape[:2]
         if height > width:  # portrait mode
-            dim = (int(width * self.tar_width / float(height)), self.tar_width)
+            dim = (int(width * size / float(height)), size)
         else:
-            dim = (self.tar_width, int(height * self.tar_width / float(width)))
-        return cv2.resize(self.src, dim, interpolation=cv2.INTER_AREA)
+            dim = (size, int(height * size / float(width)))
+        interpolation = cv2.INTER_AREA if size < max(height, width) else cv2.INTER_CUBIC
+        return cv2.resize(picture, dim, interpolation=interpolation)
 
     @staticmethod
-    def cleaning(picture):
-        """Reduction of noize, Morphomat operations, opening then closing """
+    def denoise(picture):
+        """Reduction of noize"""
         blurred = cv2.blur(picture, (4, 4))
-        clean_pic = cv2.fastNlMeansDenoisingColored(blurred, None, 10, 10, 7, 21)
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (10, 10))
-        clean_pic = cv2.morphologyEx(clean_pic, cv2.MORPH_CLOSE, kernel, cv2.BORDER_REPLICATE)
-        clean_pic = cv2.morphologyEx(clean_pic, cv2.MORPH_OPEN, kernel, cv2.BORDER_REPLICATE)
-        return clean_pic
+        return cv2.fastNlMeansDenoisingColored(blurred, None, 10, 10, 7, 21)
 
-    def clean_2(self, picture):
+    @staticmethod
+    def morphology(picture):
+        """Morphomat operations, closing then opening"""
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (10, 10))
+        clean_pic = cv2.morphologyEx(picture, cv2.MORPH_CLOSE, kernel, borderType=cv2.BORDER_REPLICATE)
+        return cv2.morphologyEx(clean_pic, cv2.MORPH_OPEN, kernel, borderType=cv2.BORDER_REPLICATE)
+
+    @staticmethod
+    def thin_contours(picture):
+        """Morphological gradient, keeps a thin line for each contour"""
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-        eroded = cv2.erode(picture, kernel, iterations=1)
-        som4 = cv2.subtract(picture, eroded)
-        self.plot_figure(som4, "Gradient")
-        return som4
+        return cv2.subtract(picture, cv2.erode(picture, kernel, iterations=1))
 
     def quantification(self, picture):
-        """Returns the K-mean image"""
-        width, height, dimension = tuple(picture.shape)
-        image_array = np.reshape(picture, (width * height, dimension))
-        image_array_sample = shuffle(image_array, random_state=0)[:1000]
-        kmeans = KMeans(n_clusters=self.nb_color, random_state=42).fit(image_array_sample)
-        labels = kmeans.predict(image_array)
-        new_img = self.recreate_image(kmeans.cluster_centers_, labels, width, height)
-        return new_img, kmeans.cluster_centers_
+        """Returns the color index of each pixel and the K-mean colors"""
+        height, width, dimension = picture.shape
+        image_array = picture.reshape(height * width, dimension).astype(np.float32)
+        rng = np.random.default_rng(0)
+        sample = image_array[rng.choice(len(image_array), min(self.nb_samples, len(image_array)), replace=False)]
+        kmeans = KMeans(n_clusters=self.nb_color, random_state=42).fit(sample)
+        labels = kmeans.predict(image_array).reshape(height, width)
+        colors = np.clip(np.rint(kmeans.cluster_centers_), 0, 255).astype(np.uint8)
+        return labels, colors
 
-    @staticmethod
-    def recreate_image(codebook, labels, width, height):
-        """Create the image from a list of colors, labels and image size"""
-        vfunc = lambda x: codebook[labels[x]]
-        out = vfunc(np.arange(width * height))
-        return np.resize(out, (width, height, codebook.shape[1]))
-
-    def display_colormap(self):
-        """Plot or save the colormap as a picture for the user"""
-
-        picture = np.ones((len(self.colormap) * 30 + 20, 300, 3), dtype="uint8") * 255
+    def colormap_picture(self):
+        """Returns the colormap as a picture for the user"""
+        picture = np.full((len(self.colormap) * 30 + 20, 300, 3), 255, dtype=np.uint8)
         for ind, col in enumerate(self.colormap):
-            cv2.putText(picture, '{:d}'.format(ind + 1),
-                        (15, 30 * ind + 20),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, 0, 2)
+            cv2.putText(picture, f"{ind + 1:d}", (15, 30 * ind + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, 0, 2)
             cv2.rectangle(picture, (45, 30 * ind + 5), (85, 30 * ind + 20), col, thickness=-1)
             cv2.putText(picture, str(col), (100, 30 * ind + 23), cv2.FONT_HERSHEY_SIMPLEX, 0.6, 0, 2)
+        return picture
 
-        if self.plot:
-            self.plot_figure(picture, 'Colormap')
+    def plot(self):
+        """Display the expected result, the canvas and the colormap"""
+        self.plot_figure(self.quantified_image, "Expected Result")
+        self.plot_figure(self.canvas, "Canvas")
+        self.plot_figure(self.colormap_picture(), "Colormap")
 
-        if self.save:
-            cv2.imwrite(f"./outputs/{self.namefile}-colormap.png", cv2.cvtColor(picture, cv2.COLOR_BGR2RGB))
+    def save(self, output_dir="./outputs"):
+        """Save the expected result, the canvas and the colormap in output_dir"""
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        outputs = {"result": cv2.cvtColor(self.quantified_image, cv2.COLOR_RGB2BGR),
+                   "canvas": self.canvas,
+                   "colormap": cv2.cvtColor(self.colormap_picture(), cv2.COLOR_RGB2BGR)}
+        for suffix, picture in outputs.items():
+            path = output_dir / f"{self.namefile}-{suffix}.png"
+            if not cv2.imwrite(str(path), picture):
+                raise OSError(f"Cannot write picture: {path}")
 
     @staticmethod
     def plot_figure(image, title):
         """Function that display an image with a title and hides some stuff"""
         plt.figure()
-        plt.clf()
-        plt.axis('off')
+        plt.axis("off")
         plt.title(title)
-        plt.imshow(image)
+        plt.imshow(image, cmap="gray" if image.ndim == 2 else None)
         plt.show()
 
 
 if __name__ == "__main__":
-    path = "./inputs/chirico.jpg"
-    nb_colors = 25
-    main_canvas = Canvas(path, nb_colors, plot=True)
+    main_canvas = Canvas("./inputs/chirico.jpg", 25)
     main_canvas.generate()
-    main_canvas.display_colormap()
+    main_canvas.plot()
