@@ -7,6 +7,9 @@ from pathlib import Path
 import cv2
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.backends.backend_agg import FigureCanvasAgg
+from matplotlib.figure import Figure
+from matplotlib.patches import FancyBboxPatch
 from sklearn.cluster import KMeans
 
 
@@ -24,18 +27,19 @@ class Canvas:
         size in pxl of the largest dimension of the output canvas
     denoise_size : int, optional, default 1500
         size in pxl of the largest dimension used for denoising (the costliest step)
-    max_contours : int, optional, default 500
-        number of regions kept, largest first
-    min_region_size : int, optional, default 10
-        minimal width and height in pxl of a region bounding box
-    min_region_area : int, optional, default 100
-        minimal area in pxl of a region
+    min_region_ratio : float, optional, default 1e-4
+        regions smaller than this fraction of the picture area are merged into their neighbours
+    min_width_ratio : float, optional, default 1/250
+        regions thinner than this fraction of the largest dimension are merged into their neighbours
     nb_samples : int, optional, default 1000
         number of pixels sampled to fit the K-mean
     """
 
-    def __init__(self, path_pic, nb_color, pixel_size=4000, denoise_size=1500, max_contours=500,
-                 min_region_size=10, min_region_area=100, nb_samples=1000):
+    border_color = 150
+    label_color = 90
+
+    def __init__(self, path_pic, nb_color, pixel_size=4000, denoise_size=1500, min_region_ratio=1e-4,
+                 min_width_ratio=1 / 250, nb_samples=1000):
         path_pic = Path(path_pic)
         src = cv2.imread(str(path_pic))
         if src is None:
@@ -45,12 +49,12 @@ class Canvas:
         self.nb_color = nb_color
         self.tar_width = pixel_size
         self.denoise_size = denoise_size
-        self.max_contours = max_contours
-        self.min_region_size = min_region_size
-        self.min_region_area = min_region_area
+        self.min_region_ratio = min_region_ratio
+        self.min_width_ratio = min_width_ratio
         self.nb_samples = nb_samples
         self.quantified_image = None
         self.canvas = None
+        self.regions = []
         self.colormap = []
 
     def generate(self):
@@ -60,32 +64,103 @@ class Canvas:
         denoised = self.denoise(self.resize(self.src, denoise_width))
         clean_img = self.morphology(self.resize(denoised, self.tar_width))
         labels, colors = self.quantification(clean_img)
+        labels, borders, dist, regions = self.merge_small_regions(labels, len(colors))
         self.colormap = colors.tolist()
         self.quantified_image = colors[labels]
+        self.regions = self.find_regions(*regions, dist)
 
-        contours = []
-        for ind in range(len(colors)):
-            mask = (labels == ind).astype(np.uint8)
-            cnts, _ = cv2.findContours(mask, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
-            for contour in cnts:
-                _, _, width_ctr, height_ctr = cv2.boundingRect(contour)
-                if width_ctr <= self.min_region_size or height_ctr <= self.min_region_size:
-                    continue
-                # Oriented area is negative for outer contours
-                area = -cv2.contourArea(contour, True)
-                if area > self.min_region_area:
-                    contours.append({"contour": contour, "area": area, "x": contour[0][0][0],
-                                     "y": contour[0][0][1] + 15, "label": str(ind + 1)})
-
-        # Keep the largest contours only
-        sorted_contours = sorted(contours, key=lambda d: d["area"], reverse=True)[:self.max_contours]
-        canvas = np.zeros(labels.shape, dtype=np.uint8)
-        cv2.drawContours(canvas, [c["contour"] for c in sorted_contours], -1, 255, 1)
-        canvas = 255 - self.thin_contours(canvas)
-        for cont in sorted_contours:
-            cv2.putText(canvas, cont["label"], (cont["x"], cont["y"]), cv2.FONT_HERSHEY_SIMPLEX, 0.5, 0, 1)
+        canvas = np.full(labels.shape, 255, dtype=np.uint8)
+        canvas[borders] = self.border_color
+        for region in self.regions:
+            self.draw_label(canvas, region)
         self.canvas = canvas
         return canvas
+
+    def merge_small_regions(self, labels, nb_color, max_iter=3):
+        """Give the regions too small or too thin to be painted the color of the closest large region
+
+        Returns the merged labels, their borders, the distance to the borders and the regions (see label_regions)
+        """
+        min_area = self.min_region_ratio * labels.size
+        min_radius = self.min_width_ratio * max(labels.shape) / 2
+        for iteration in range(max_iter + 1):
+            borders = self.borders(labels)
+            dist = self.distance_to_borders(borders)
+            regions = self.label_regions(labels, nb_color)
+            if iteration == max_iter:
+                break
+            ids, _, stats = regions
+            # A region is wide enough if one of its pixels is farther than min_radius from any border
+            is_wide = np.zeros(len(stats), dtype=bool)
+            is_wide[ids[dist >= min_radius]] = True
+            small = ((stats[:, cv2.CC_STAT_AREA] < min_area) | ~is_wide)[ids]
+            if not small.any() or small.all():
+                break
+            # Each small pixel gets the index (in raster order, from 1) of the closest pixel of a large region
+            _, closest = cv2.distanceTransformWithLabels(small.view(np.uint8), cv2.DIST_L2, 5,
+                                                         labelType=cv2.DIST_LABEL_PIXEL)
+            labels = labels.copy()
+            labels[small] = labels[~small][closest[small] - 1]
+        return labels, borders, dist, regions
+
+    @staticmethod
+    def label_regions(labels, nb_color):
+        """Split the picture in connected regions of a single color
+
+        Returns the region id of each pixel, and the color index and stats (x, y, width, height, area) of each region
+        """
+        ids = np.zeros(labels.shape, dtype=np.int32)
+        offsets = np.zeros(nb_color, dtype=np.int32)
+        region_colors, region_stats = [], []
+        for ind in range(nb_color):
+            nb_comp, components, stats, _ = cv2.connectedComponentsWithStats((labels == ind).view(np.uint8),
+                                                                             connectivity=4)
+            # Each pixel has a single color, so it only receives the id of its own component
+            ids += components
+            offsets[ind] = len(region_colors) - 1
+            region_colors += [ind] * (nb_comp - 1)
+            region_stats.append(stats[1:])
+        ids += offsets[labels]
+        return ids, np.array(region_colors), np.concatenate(region_stats)
+
+    @staticmethod
+    def distance_to_borders(borders):
+        """Distance of each pixel to the closest border"""
+        return cv2.distanceTransform((~borders).view(np.uint8), cv2.DIST_L2, 5)
+
+    @staticmethod
+    def borders(labels):
+        """Pixels where the color changes, the picture frame included"""
+        borders = np.zeros(labels.shape, dtype=bool)
+        borders[:, :-1] |= labels[:, :-1] != labels[:, 1:]
+        borders[:-1] |= labels[:-1] != labels[1:]
+        borders[[0, -1]] = True
+        borders[:, [0, -1]] = True
+        return borders
+
+    @staticmethod
+    def find_regions(ids, region_colors, stats, dist):
+        """List the regions, with the point farthest from their borders where to put the label"""
+        regions = []
+        for region_id, (ind, (x, y, width, height, area)) in enumerate(zip(region_colors, stats)):
+            local = np.where(ids[y:y + height, x:x + width] == region_id, dist[y:y + height, x:x + width], 0)
+            py, px = np.unravel_index(np.argmax(local), local.shape)
+            regions.append({"label": int(ind) + 1, "area": int(area), "x": int(x + px), "y": int(y + py),
+                            "radius": float(local[py, px])})
+        return regions
+
+    def draw_label(self, canvas, region):
+        """Draw the label of a region, centered and sized to fit in the region"""
+        text = str(region["label"])
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        (text_w, text_h), _ = cv2.getTextSize(text, font, 1, 1)
+        # Scale so that the text fits in the largest inscribed circle, within readable bounds
+        min_scale, max_scale = self.tar_width / 8000, self.tar_width / 4500
+        scale = float(np.clip(1.4 * region["radius"] / np.hypot(text_w, text_h), min_scale, max_scale))
+        thickness = max(1, round(scale * 1.5))
+        (text_w, text_h), _ = cv2.getTextSize(text, font, scale, thickness)
+        origin = (int(region["x"] - text_w / 2), int(region["y"] + text_h / 2))
+        cv2.putText(canvas, text, origin, font, scale, self.label_color, thickness, cv2.LINE_AA)
 
     @staticmethod
     def resize(picture, size):
@@ -111,31 +186,51 @@ class Canvas:
         clean_pic = cv2.morphologyEx(picture, cv2.MORPH_CLOSE, kernel, borderType=cv2.BORDER_REPLICATE)
         return cv2.morphologyEx(clean_pic, cv2.MORPH_OPEN, kernel, borderType=cv2.BORDER_REPLICATE)
 
-    @staticmethod
-    def thin_contours(picture):
-        """Morphological gradient, keeps a thin line for each contour"""
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-        return cv2.subtract(picture, cv2.erode(picture, kernel, iterations=1))
-
     def quantification(self, picture):
-        """Returns the color index of each pixel and the K-mean colors"""
+        """Returns the color index of each pixel and the K-mean colors
+
+        The K-mean runs in the CIELAB color space, where distances match the perceived color differences
+        """
         height, width, dimension = picture.shape
-        image_array = picture.reshape(height * width, dimension).astype(np.float32)
+        lab = cv2.cvtColor(picture.astype(np.float32) / 255, cv2.COLOR_RGB2Lab)
+        image_array = lab.reshape(height * width, dimension)
         rng = np.random.default_rng(0)
         sample = image_array[rng.choice(len(image_array), min(self.nb_samples, len(image_array)), replace=False)]
         kmeans = KMeans(n_clusters=self.nb_color, random_state=42).fit(sample)
         labels = kmeans.predict(image_array).reshape(height, width)
-        colors = np.clip(np.rint(kmeans.cluster_centers_), 0, 255).astype(np.uint8)
+        centers = kmeans.cluster_centers_.astype(np.float32).reshape(1, -1, dimension)
+        colors = cv2.cvtColor(centers, cv2.COLOR_Lab2RGB).reshape(-1, dimension)
+        colors = np.clip(np.rint(colors * 255), 0, 255).astype(np.uint8)
         return labels, colors
 
-    def colormap_picture(self):
-        """Returns the colormap as a picture for the user"""
-        picture = np.full((len(self.colormap) * 30 + 20, 300, 3), 255, dtype=np.uint8)
+    def colormap_picture(self, dpi=200):
+        """Returns the colormap as a picture for the user: numbered swatches with their hex and RGB codes"""
+        nb_cols = 2 if len(self.colormap) > 8 else 1
+        nb_rows = -(-len(self.colormap) // nb_cols)
+        # Layout in inches
+        margin, col_width, row_height, swatch_width = 0.3, 2.4, 0.5, 0.7
+        width, height = 2 * margin + nb_cols * col_width, 2 * margin + nb_rows * row_height
+        fig = Figure(figsize=(width, height), dpi=dpi, facecolor="white")
+        axes = fig.add_axes((0, 0, 1, 1))
+        axes.set_xlim(0, width)
+        axes.set_ylim(height, 0)
+        axes.axis("off")
         for ind, col in enumerate(self.colormap):
-            cv2.putText(picture, f"{ind + 1:d}", (15, 30 * ind + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, 0, 2)
-            cv2.rectangle(picture, (45, 30 * ind + 5), (85, 30 * ind + 20), col, thickness=-1)
-            cv2.putText(picture, str(col), (100, 30 * ind + 23), cv2.FONT_HERSHEY_SIMPLEX, 0.6, 0, 2)
-        return picture
+            column, row = divmod(ind, nb_rows)
+            x, y = margin + column * col_width, margin + row * row_height
+            rgb = np.array(col) / 255
+            axes.add_patch(FancyBboxPatch((x, y + 0.07), swatch_width, row_height - 0.14,
+                                          boxstyle="round,pad=0,rounding_size=0.07", fc=rgb, ec="#00000030", lw=0.8))
+            luminance = 0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]
+            axes.text(x + swatch_width / 2, y + row_height / 2, str(ind + 1), ha="center", va="center", fontsize=11,
+                      weight="bold", color="white" if luminance < 0.55 else "#222222")
+            axes.text(x + swatch_width + 0.15, y + row_height * 0.4, "#{:02X}{:02X}{:02X}".format(*col),
+                      va="center", fontsize=10, family="monospace", color="#222222")
+            axes.text(x + swatch_width + 0.15, y + row_height * 0.72, "RGB {} {} {}".format(*col), va="center",
+                      fontsize=7, color="#888888")
+        canvas = FigureCanvasAgg(fig)
+        canvas.draw()
+        return np.asarray(canvas.buffer_rgba())[..., :3].copy()
 
     def plot(self):
         """Display the expected result, the canvas and the colormap"""
