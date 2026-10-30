@@ -35,6 +35,8 @@ class Canvas:
         regions thinner than this fraction of the largest dimension are merged into their neighbours
     smoothing_ratio : float, optional, default 1/1000
         strength of the borders smoothing, as a fraction of the largest dimension (0 to disable)
+    min_color_distance : float, optional, default 6
+        colors closer than this CIELAB distance (delta E) are merged, so the canvas may use less than nb_color
     nb_samples : int, optional, default 1000
         number of pixels sampled to fit the K-mean
     """
@@ -45,7 +47,7 @@ class Canvas:
     paper_sizes = {"a4": (8.27, 11.69), "a3": (11.69, 16.54), "letter": (8.5, 11)}
 
     def __init__(self, path_pic, nb_color, pixel_size=4000, denoise_size=1500, min_region_ratio=1e-4,
-                 min_width_ratio=1 / 250, smoothing_ratio=1 / 1000, nb_samples=1000):
+                 min_width_ratio=1 / 250, smoothing_ratio=1 / 1000, min_color_distance=6, nb_samples=1000):
         if not 1 <= nb_color <= 256:
             raise ValueError("nb_color must be between 1 and 256")
         path_pic = Path(path_pic)
@@ -60,6 +62,7 @@ class Canvas:
         self.min_region_ratio = min_region_ratio
         self.min_width_ratio = min_width_ratio
         self.smoothing_ratio = smoothing_ratio
+        self.min_color_distance = min_color_distance
         self.nb_samples = nb_samples
         self.quantified_image = None
         self.canvas = None
@@ -75,11 +78,12 @@ class Canvas:
         clean_img = self.morphology(self.resize(denoised, self.tar_width))
         labels, colors = self.quantification(clean_img)
         labels = self.smooth_labels(labels, len(colors))
-        labels, borders, dist, regions = self.merge_small_regions(labels, len(colors))
+        labels, borders, dist, (ids, region_colors, stats) = self.merge_small_regions(labels, colors)
+        labels, colors, region_colors = self.sort_palette(labels, colors, region_colors)
         self.colormap = colors.tolist()
         self.quantified_image = colors[labels]
         self.borders = borders
-        self.regions = self.find_regions(*regions, dist)
+        self.regions = self.find_regions(ids, region_colors, stats, dist)
 
         canvas = np.full(labels.shape, 255, dtype=np.uint8)
         canvas[borders] = self.border_color
@@ -109,32 +113,105 @@ class Canvas:
             return labels
         return self.vote(labels, nb_color, lambda mask: cv2.GaussianBlur(mask, (0, 0), sigma))
 
-    def merge_small_regions(self, labels, nb_color, max_iter=3):
-        """Give the regions too small or too thin to be painted the color of the closest large region
+    def merge_small_regions(self, labels, colors, max_iter=3):
+        """Give the regions too small or too thin to be painted the color of their closest large neighbour
 
         Returns the merged labels, their borders, the distance to the borders and the regions (see label_regions)
         """
+        lab = self.rgb_to_lab(colors)
         min_area = self.min_region_ratio * labels.size
         min_radius = self.min_width_ratio * max(labels.shape) / 2
         for iteration in range(max_iter + 1):
             borders = self.find_borders(labels)
             dist = self.distance_to_borders(borders)
-            regions = self.label_regions(labels, nb_color)
+            regions = self.label_regions(labels, len(colors))
             if iteration == max_iter:
                 break
-            ids, _, stats = regions
+            ids, region_colors, stats = regions
             # A region is wide enough if one of its pixels is farther than min_radius from any border
             is_wide = np.zeros(len(stats), dtype=bool)
             is_wide[ids[dist >= min_radius]] = True
-            small = ((stats[:, cv2.CC_STAT_AREA] < min_area) | ~is_wide)[ids]
+            small_regions = (stats[:, cv2.CC_STAT_AREA] < min_area) | ~is_wide
+            small = small_regions[ids]
             if not small.any() or small.all():
                 break
-            # Each small pixel gets the index (in raster order, from 1) of the closest pixel of a large region
-            _, closest = cv2.distanceTransformWithLabels(small.view(np.uint8), cv2.DIST_L2, 5,
-                                                         labelType=cv2.DIST_LABEL_PIXEL)
             labels = labels.copy()
-            labels[small] = labels[~small][closest[small] - 1]
+            new_colors = self.closest_color_neighbours(ids, region_colors, small_regions, lab)[ids]
+            assigned = small & (new_colors >= 0)
+            labels[assigned] = new_colors[assigned]
+            # Small regions with no large neighbour: each pixel gets the index (in raster order, from 1)
+            # of the closest pixel of another region
+            remaining = small & ~assigned
+            if remaining.any():
+                _, closest = cv2.distanceTransformWithLabels(remaining.view(np.uint8), cv2.DIST_L2, 5,
+                                                             labelType=cv2.DIST_LABEL_PIXEL)
+                labels[remaining] = labels[~remaining][closest[remaining] - 1]
         return labels, borders, dist, regions
+
+    @staticmethod
+    def closest_color_neighbours(ids, region_colors, small_regions, lab):
+        """For each small region, the color of its large neighbour with the closest color (-1 if none)"""
+        nb_regions = len(region_colors)
+        firsts, seconds = [], []
+        for first, second in ((ids[:, :-1], ids[:, 1:]), (ids[:-1], ids[1:])):
+            touching = first != second
+            firsts += [first[touching], second[touching]]
+            seconds += [second[touching], first[touching]]
+        small, neighbour = np.concatenate(firsts), np.concatenate(seconds)
+        keep = small_regions[small] & ~small_regions[neighbour]
+        # Unique pairs of (small region, large neighbour)
+        pairs = np.unique(small[keep].astype(np.int64) * nb_regions + neighbour[keep])
+        small, neighbour = pairs // nb_regions, pairs % nb_regions
+        distance = np.linalg.norm(lab[region_colors[small]] - lab[region_colors[neighbour]], axis=1)
+        # Sort by small region, then by color distance: the first pair of each small region is the closest
+        order = np.lexsort((distance, small))
+        small, neighbour = small[order], neighbour[order]
+        _, first_pairs = np.unique(small, return_index=True)
+        new_colors = np.full(nb_regions, -1, dtype=np.int16)
+        new_colors[small[first_pairs]] = region_colors[neighbour[first_pairs]]
+        return new_colors
+
+    def sort_palette(self, labels, colors, region_colors):
+        """Remove the unused colors and sort the others: greys, then colors by hue, each group from light to dark"""
+        used = np.unique(region_colors)
+        lab = self.rgb_to_lab(colors[used])
+        chroma = np.hypot(lab[:, 1], lab[:, 2])
+        # Groups of 30° of hue, starting from red, through orange, yellow, green, blue and purple
+        hue_group = ((np.degrees(np.arctan2(lab[:, 2], lab[:, 1])) - 10) % 360) // 30
+        group = np.where(chroma < 15, -1, hue_group)
+        order = used[np.lexsort((-lab[:, 0], group))]
+        lut = np.zeros(len(colors), dtype=np.uint8)
+        lut[order] = np.arange(len(order))
+        return lut[labels], colors[order], lut[region_colors]
+
+    @staticmethod
+    def rgb_to_lab(colors):
+        """Convert a list of uint8 RGB colors to CIELAB"""
+        return cv2.cvtColor(colors.reshape(1, -1, 3).astype(np.float32) / 255, cv2.COLOR_RGB2Lab)[0]
+
+    def merge_close_colors(self, centers, counts):
+        """Merge the CIELAB colors closer than min_color_distance, averaged by their number of pixels
+
+        Returns the lookup table from the old to the new color indices, and the new colors
+        """
+        centers, counts = centers.astype(np.float64), counts.astype(np.float64)
+        lut, active = np.arange(len(centers)), list(range(len(centers)))
+        while len(active) > 1:
+            distance = np.linalg.norm(centers[active][:, None] - centers[active][None], axis=2)
+            np.fill_diagonal(distance, np.inf)
+            i, j = np.unravel_index(np.argmin(distance), distance.shape)
+            if distance[i, j] >= self.min_color_distance:
+                break
+            keep, drop = active[i], active[j]
+            total = counts[keep] + counts[drop]
+            if total > 0:
+                centers[keep] = (centers[keep] * counts[keep] + centers[drop] * counts[drop]) / total
+            counts[keep] = total
+            lut[lut == drop] = keep
+            active.remove(drop)
+        compact = np.zeros(len(centers), dtype=np.int64)
+        compact[active] = np.arange(len(active))
+        return compact[lut].astype(np.uint8), centers[active]
 
     @staticmethod
     def label_regions(labels, nb_color):
@@ -236,7 +313,10 @@ class Canvas:
         kmeans = KMeans(n_clusters=self.nb_color, random_state=42).fit(sample)
         # uint8 labels are lighter to process, and enough for up to 256 colors
         labels = kmeans.predict(image_array).reshape(height, width).astype(np.uint8)
-        centers = kmeans.cluster_centers_.astype(np.float32).reshape(1, -1, dimension)
+        lut, centers = self.merge_close_colors(kmeans.cluster_centers_, np.bincount(labels.ravel(),
+                                                                                    minlength=self.nb_color))
+        labels = lut[labels]
+        centers = centers.astype(np.float32).reshape(1, -1, dimension)
         colors = cv2.cvtColor(centers, cv2.COLOR_Lab2RGB).reshape(-1, dimension)
         colors = np.clip(np.rint(colors * 255), 0, 255).astype(np.uint8)
         return labels, colors

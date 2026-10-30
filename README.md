@@ -10,11 +10,11 @@ A quick Python tool to transform any picture in a paint-by-number canvas, using 
 
 # How it works
 1) Picture is resized, denoised and cleaned using morphomat  
-2) K-mean algorithm, in the CIELAB color space, to detect the k-colors summarizing the best the picture  
+2) K-mean algorithm, in the CIELAB color space, to detect the k-colors summarizing the best the picture, merging the colors too close to tell apart  
 3) Transformation of the picture to match these colors, with smoothed borders  
-4) Regions too small or too thin to be painted are merged into their neighbours  
+4) Regions too small or too thin to be painted are merged into their neighbour of closest color  
 5) Drawing of the borders and of the label of each region on a new canvas  
-6) Creation of the colormap for the user, and of a printable PDF (palette page, then vector canvas page)
+6) Creation of the colormap for the user, sorted by hue and lightness, and of a printable PDF (palette page, then vector canvas page)
 
 # This project includes
 A set of PNG pictures in `./inputs` folder, associated canvas and colormaps in the `./outputs` folder
