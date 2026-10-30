@@ -28,7 +28,7 @@ class Canvas:
     pixel_size : int, optional, default 4000
         size in pxl of the largest dimension of the output canvas
     denoise_size : int, optional, default 1500
-        size in pxl of the largest dimension used for denoising (the costliest step)
+        size in pxl of the largest dimension used for denoising
     min_region_ratio : float, optional, default 1e-4
         regions smaller than this fraction of the picture area are merged into their neighbours
     min_width_ratio : float, optional, default 1/250
@@ -75,7 +75,7 @@ class Canvas:
         # Denoising is done before upscaling to the target size, as its cost grows with the number of pixels
         denoise_width = min(self.denoise_size, self.tar_width, max(self.src.shape[:2]))
         denoised = self.denoise(self.resize(self.src, denoise_width))
-        clean_img = self.morphology(self.resize(denoised, self.tar_width))
+        clean_img = self.resize(denoised, self.tar_width)
         labels, colors = self.quantification(clean_img)
         labels = self.smooth_labels(labels, len(colors))
         labels, borders, dist, (ids, region_colors, stats) = self.merge_small_regions(labels, colors)
@@ -286,19 +286,11 @@ class Canvas:
         return cv2.resize(picture, self.target_dim(picture.shape, size), interpolation=interpolation)
 
     @staticmethod
-    def denoise(picture):
-        """Reduction of noize"""
-        blurred = cv2.blur(picture, (4, 4))
-        return cv2.fastNlMeansDenoisingColored(blurred, None, 10, 10, 7, 21)
-
-    @staticmethod
-    def morphology(picture):
-        """Morphomat operations, closing then opening"""
-        # Kernel of 10 pxl for a 4000 pxl picture
-        size = max(3, round(max(picture.shape[:2]) / 400))
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (size, size))
-        clean_pic = cv2.morphologyEx(picture, cv2.MORPH_CLOSE, kernel, borderType=cv2.BORDER_REPLICATE)
-        return cv2.morphologyEx(clean_pic, cv2.MORPH_OPEN, kernel, borderType=cv2.BORDER_REPLICATE)
+    def denoise(picture, iterations=2):
+        """Reduction of noize with a bilateral filter, which flattens the textures but keeps the edges sharp"""
+        for _ in range(iterations):
+            picture = cv2.bilateralFilter(picture, 9, 40, 7)
+        return picture
 
     def quantification(self, picture):
         """Returns the color index of each pixel and the K-mean colors

@@ -9,7 +9,7 @@
 A quick Python tool to transform any picture in a paint-by-number canvas, using opencv
 
 # How it works
-1) Picture is resized, denoised and cleaned using morphomat  
+1) Picture is resized and denoised with a bilateral filter, which flattens the textures but keeps the edges sharp  
 2) K-mean algorithm, in the CIELAB color space, to detect the k-colors summarizing the best the picture, merging the colors too close to tell apart  
 3) Transformation of the picture to match these colors, with smoothed borders  
 4) Regions too small or too thin to be painted are merged into their neighbour of closest color  
@@ -46,7 +46,7 @@ Example: `uv run run.py inputs/chirico.jpg 20 --title "Place d'Italie" --subtitl
 
 ### Result:
 
-#### De Chirico, Place d'Italie, 1922 (20 colors requested, 18 kept after merging the closest ones)
+#### De Chirico, Place d'Italie, 1922 (20 colors requested, 19 kept after merging the closest ones)
 ![De Chirico, Place d'Italie: source, expected result and colormap](outputs/chirico-overview.png)
 ![De Chirico, Place d'Italie: canvas](outputs/chirico-canvas.png)
 
@@ -61,4 +61,3 @@ Palette page, then vector canvas page:
 
 ### Next Steps:
 - Repeat the label in large or elongated regions
-- Edge-preserving smoothing (mean-shift or bilateral filter) instead of blur and morphomat
