@@ -1,3 +1,4 @@
 ./outputs/*
 ./venv
 ./inputs/STEPS/*
+.venv/

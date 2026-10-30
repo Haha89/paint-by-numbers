@@ -17,9 +17,12 @@ The definition of the class Canvas in the python script `canvas.py`
 - Numpy
 - Matplotlib
 - OpenCV
+- scikit-learn
+
+Dependencies are managed with [uv](https://docs.astral.sh/uv/). Install them with `uv sync`.
 
 ### Execution:
-run `python run.py [path] [nb_color] [plot] [save] [pixel_size]` with:
+run `uv run run.py [path] [nb_color] [plot] [save] [pixel_size]` with:
 
   **path**: path of the source picture  
   **nb_color** : number of colors you want in the canvas (10 to 20)  
