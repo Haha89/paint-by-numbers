@@ -3,11 +3,11 @@ A quick Python tool to transform any picture in a paint-by-number canvas, using 
 
 # How it works
 1) Picture is resized, denoised and cleaned using morphomat  
-2) K-mean algorithm to detect the k-colors summarizing the best the picture  
-3) Transformation of the picture to match these colors  
-4) Contour detection and drawing of contours on new canvas  
-5) Add label of each shape on the canvas  
-6) Creation of the colormap for the user
+2) K-mean algorithm, in the CIELAB color space, to detect the k-colors summarizing the best the picture  
+3) Transformation of the picture to match these colors, with smoothed borders  
+4) Regions too small or too thin to be painted are merged into their neighbours  
+5) Drawing of the borders and of the label of each region on a new canvas  
+6) Creation of the colormap for the user, and of a printable PDF (palette page, then vector canvas page)
 
 # This project includes
 A set of PNG pictures in `./inputs` folder, associated canvas and colormaps in the `./outputs` folder
@@ -22,14 +22,20 @@ The definition of the class Canvas in the python script `canvas.py`
 Dependencies are managed with [uv](https://docs.astral.sh/uv/). Install them with `uv sync`.
 
 ### Execution:
-run `uv run run.py path nb_color [--plot] [--no-save] [--pixel-size N] [--output-dir DIR]` with:
+run `uv run run.py path nb_color [--plot] [--no-save] [--pixel-size N] [--output-dir DIR] [--no-pdf] [--title T] [--subtitle S] [--paper P]` with:
 
   **path**: path of the source picture  
   **nb_color** : number of colors you want in the canvas (10 to 20)  
   **--plot**: optional, show the results in plots  
   **--no-save**: optional, do not save the results in the output folder  
   **--pixel-size**: optional, integer, size in pixel of the largest dimension of the output canvas (default 4000)  
-  **--output-dir**: optional, folder where results are saved (default `./outputs`)
+  **--output-dir**: optional, folder where results are saved (default `./outputs`)  
+  **--no-pdf**: optional, do not save the printable PDF  
+  **--title**: optional, title printed in the PDF (default: name of the picture)  
+  **--subtitle**: optional, subtitle printed in the PDF, e.g. the artist and year  
+  **--paper**: optional, PDF paper size: `a4`, `a3` or `letter` (default `a4`)
+
+Example: `uv run run.py inputs/chirico.jpg 20 --title "Place d'Italie" --subtitle "Giorgio De Chirico, 1922"`
 
 ### Result:
 

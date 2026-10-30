@@ -14,12 +14,16 @@ if __name__ == "__main__":
     parser.add_argument("--pixel-size", type=int, default=4000,
                         help="size in pixel of the largest dimension of the output canvas (default 4000)")
     parser.add_argument("--output-dir", default="./outputs", help="folder where results are saved (default ./outputs)")
+    parser.add_argument("--no-pdf", dest="pdf", action="store_false", help="do not save the printable PDF")
+    parser.add_argument("--title", help="title printed in the PDF (default: name of the picture)")
+    parser.add_argument("--subtitle", default="", help="subtitle printed in the PDF, e.g. the artist and year")
+    parser.add_argument("--paper", choices=sorted(Canvas.paper_sizes), default="a4", help="PDF paper size (default a4)")
     args = parser.parse_args()
 
     CANVAS = Canvas(args.path, args.nb_color, pixel_size=args.pixel_size)
     CANVAS.generate()
     if args.save:
-        CANVAS.save(args.output_dir)
+        CANVAS.save(args.output_dir, args.pdf, args.title, args.subtitle, args.paper)
     if args.plot:
         CANVAS.plot()
     print("Canvas generated")
