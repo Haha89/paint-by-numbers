@@ -61,3 +61,5 @@ Palette page, then vector canvas page:
 
 ### Next Steps:
 - Repeat the label in large or elongated regions
+- Difficulty choice: a detail level between faithful and easy to paint (`--detail` option)
+- Web interface with Dash: upload a picture, tune the options, preview and download the results and the PDF
