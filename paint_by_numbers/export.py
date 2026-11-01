@@ -17,6 +17,8 @@ PAPER_SIZES = {"a4": (8.27, 11.69), "a3": (11.69, 16.54), "letter": (8.5, 11)}
 # Standard canvas sizes in inches, portrait
 PRINT_SIZES = {"8x10": (8, 10), "9x12": (9, 12), "11x14": (11, 14), "12x16": (12, 16), "16x20": (16, 20),
                "18x24": (18, 24), "24x36": (24, 36)}
+# Margins and header of a canvas page fitting the paper, in inches
+PAGE_MARGIN, PAGE_HEADER = 0.6, 0.65
 # Font sizes of the labels in points: readable once printed, even when the number overflows a tiny region
 MIN_LABEL_SIZE, MAX_LABEL_SIZE = 5, 7
 
@@ -31,12 +33,24 @@ def oriented(size, width_px, height_px):
     return (max(size), min(size)) if width_px > height_px else (min(size), max(size))
 
 
-def printed_size(shape, print_size):
-    """The (width, height) in inches of a picture printed as large as possible on a standard canvas size"""
+def page_layout(shape, paper, print_size=None):
+    """Returns the (width, height) of the canvas page, its inches per pixel and the position of the canvas
+
+    With a print_size, the page has exactly this size and only holds the canvas, centered. Otherwise, the canvas fits
+    in the margins of the paper, under a header
+    """
     height_px, width_px = shape[:2]
-    width, height = oriented(PRINT_SIZES[print_size], width_px, height_px)
-    scale = min(width / width_px, height / height_px)
-    return width_px * scale, height_px * scale
+    width, height = oriented(PRINT_SIZES[print_size] if print_size else paper, width_px, height_px)
+    margin, header = (0, 0) if print_size else (PAGE_MARGIN, PAGE_HEADER)
+    scale = min((width - 2 * margin) / width_px, (height - 2 * margin - header) / height_px)
+    top = (height - height_px * scale) / 2 if print_size else margin + header
+    return (width, height), scale, np.array([(width - width_px * scale) / 2, top])
+
+
+def printed_size(shape, print_size=None, paper="a4"):
+    """The (width, height) in inches of a picture once printed"""
+    _, scale, _ = page_layout(shape, PAPER_SIZES[paper], print_size)
+    return shape[1] * scale, shape[0] * scale
 
 
 def inch_figure(width, height, dpi=100):
@@ -112,25 +126,14 @@ def palette_page(canvas, paper, title, subtitle):
 
 
 def canvas_page(canvas, paper, title, subtitle, print_size=None):
-    """PDF page with the canvas, borders and labels as vectors
-
-    With a print_size, the page has exactly this size in inches and only holds the canvas, centered. Otherwise, the
-    canvas fits in the margins of the paper, under a header
-    """
-    height_px, width_px = canvas.borders.shape
-    width, height = oriented(PRINT_SIZES[print_size] if print_size else paper, width_px, height_px)
+    """PDF page with the canvas, borders and labels as vectors, see page_layout"""
+    (width, height), scale, offset = page_layout(canvas.borders.shape, paper, print_size)
     fig, axes = inch_figure(width, height)
-    if print_size:
-        scale = min(width / width_px, height / height_px)
-        offset = np.array([(width - width_px * scale) / 2, (height - height_px * scale) / 2])
-    else:
-        margin, header = 0.6, 0.65
-        axes.text(margin, margin, title, fontsize=15, weight="bold", va="top", color="#222222")
-        axes.text(margin, margin + 0.3, subtitle, fontsize=9, va="top", color="#777777")
-        axes.text(width - margin, margin, f"{len(canvas.colormap)} colors", fontsize=9, ha="right", va="top",
+    if not print_size:
+        axes.text(PAGE_MARGIN, PAGE_MARGIN, title, fontsize=15, weight="bold", va="top", color="#222222")
+        axes.text(PAGE_MARGIN, PAGE_MARGIN + 0.3, subtitle, fontsize=9, va="top", color="#777777")
+        axes.text(width - PAGE_MARGIN, PAGE_MARGIN, f"{len(canvas.colormap)} colors", fontsize=9, ha="right", va="top",
                   color="#777777")
-        scale = min((width - 2 * margin) / width_px, (height - 2 * margin - header) / height_px)
-        offset = np.array([(width - width_px * scale) / 2, margin + header])
     # The borders are 1 pxl wide, so both sides of a border are traced on the same pixels: no double lines
     contours, _ = cv2.findContours(canvas.borders.view(np.uint8), cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
     polygons = [(cv2.approxPolyDP(contour, 0.8, True)[:, 0, :] + 0.5) * scale + offset for contour in contours]

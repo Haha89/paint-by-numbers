@@ -12,14 +12,15 @@ import dash_mantine_components as dmc
 import plotly.graph_objects as go
 from dash import ALL, Dash, Input, Output, Patch, State, ctx, dcc, html, no_update
 from flask import abort, send_file
+from waitress import serve
 
 from ..canvas import Canvas
+from ..export import printed_size
 from . import service
 
 COLOR_MARKS = [5, 10, 15, 20, 25, 30, 35, 40]
 CM_PER_INCH = 2.54
 FIT_PAPER = "fit"
-DOWNLOADS = [("PDF", "pdf"), ("Canvas PNG", "canvas"), ("Expected result PNG", "result"), ("Colormap PNG", "colormap")]
 CROP_SHAPE_STYLE = {"line": {"color": "#4c6ef5", "width": 3}, "fillcolor": "rgba(76, 110, 245, 0.12)"}
 FONT = "Inter, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif"
 THEME = {"primaryColor": "indigo", "defaultRadius": "md", "fontFamily": FONT, "headings": {"fontFamily": FONT}}
@@ -51,14 +52,25 @@ def print_size_choices():
     return choices([*sizes, ("Fit the paper, with a title", FIT_PAPER)])
 
 
-def describe_build(built):
-    """The sentence shown above the downloads"""
-    text = f"Canvas ready: {built['regions']} regions, {built['colors']} colors."
-    if built["printed"]:
-        width, height = built["printed"]
-        text += f" Printed size: {width:.1f} x {height:.1f} in ({width * CM_PER_INCH:.0f} x " \
-                f"{height * CM_PER_INCH:.0f} cm)."
-    return text
+def describe_print(source, crop, print_size, paper):
+    """The size the picture will have once printed, for the current crop and choices"""
+    if not source:
+        return "Choose a picture to see its printed size."
+    width, height = source["width"], source["height"]
+    if crop:
+        left, top, right, bottom = crop
+        width, height = width * (right - left), height * (bottom - top)
+    standard = None if print_size == FIT_PAPER else print_size
+    printed_width, printed_height = printed_size((height, width), standard, paper)
+    text = (f"Printed size: {printed_width:.1f} x {printed_height:.1f} in "
+            f"({printed_width * CM_PER_INCH:.0f} x {printed_height * CM_PER_INCH:.0f} cm)")
+    if not standard:
+        return f"{text}, on a {paper.upper() if paper != 'letter' else 'Letter'} sheet."
+    page_width, page_height = Canvas.print_sizes[standard]
+    filled = printed_width * printed_height / (page_width * page_height)
+    if filled > 0.99:
+        return f"{text}, filling the page."
+    return f"{text}, {filled:.0%} of the {page_width} x {page_height} in page: crop the picture to fill it."
 
 
 def layout():
@@ -97,7 +109,7 @@ def layout():
         dmc.Stack([
             dmc.Stack([dmc.Text("Number of colors", fw=600, size="sm"),
                        dmc.Slider(id="nb-color", min=COLOR_MARKS[0], max=COLOR_MARKS[-1], step=1, value=20, mb="md",
-                                  updatemode="drag",  # By default, a click on the track moves it without a new value
+                                  updatemode="drag",  # Keep each value, rather than only the one ending a gesture
                                   marks=[{"value": value, "label": str(value)} for value in COLOR_MARKS])], gap=6),
             dmc.Group(dmc.Button("Update the previews", id="generate", size="md", disabled=True), mt="sm")],
             gap="lg"))
@@ -121,6 +133,7 @@ def layout():
                                (name.upper() if name != "letter" else "Letter", name)
                                for name in sorted(Canvas.paper_sizes)))], gap=6)],
                 gap="xl", align="flex-start"),
+            dmc.Text(id="print-estimate", fw=500, size="sm"),
             dmc.Group(dmc.Button("Build the canvas", id="build", size="md", disabled=True)),
             html.Div(id="build-result")],
             gap="lg"))
@@ -149,15 +162,16 @@ def detail_card(preview):
 
 
 def build_result(built, session_id):
-    """The final pictures in tabs, and their download buttons"""
+    """The final pictures in tabs, and the button to download them with the PDF"""
     # The timestamp keeps the browser from serving a previous build of the same session
-    version = time.time_ns()
-    buttons = [html.A(dmc.Button(label, variant="filled" if kind == "pdf" else "light"), download="",
-                      href=f"/files/{session_id}/{kind}?v={version}") for label, kind in DOWNLOADS]
+    button = html.A(dmc.Button("Download everything (ZIP)", id="download"), download="",
+                    href=f"/files/{session_id}?v={time.time_ns()}")
     tabs = [("Canvas", "canvas"), ("Expected result", "result"), ("Colormap", "colormap")]
     return dmc.Stack([
-        dmc.Text(describe_build(built), c="green", size="sm", fw=500),
-        dmc.Group(buttons, gap="sm"),
+        dmc.Text(f"Canvas ready: {built['regions']} regions, {built['colors']} colors.", c="green", size="sm", fw=500),
+        dmc.Stack([dmc.Group(button),
+                   dmc.Text("The printable PDF, the canvas, the expected result and the colormap.", c="dimmed",
+                            size="xs")], gap=4),
         dmc.Tabs([dmc.TabsList([dmc.TabsTab(label, value=kind) for label, kind in tabs]),
                   *[dmc.TabsPanel(html.Img(src=built[kind], className="result-image"), value=kind)
                     for _, kind in tabs]],
@@ -278,6 +292,9 @@ def create_app():
         left, top, right, bottom = crop
         return f"Area kept: {(right - left) * 100:.0f}% of the width x {(bottom - top) * 100:.0f}% of the height."
 
+    app.callback(Output("print-estimate", "children"), Input("source", "data"), Input("crop", "data"),
+                 Input("print-size", "value"), Input("paper", "value"))(describe_print)
+
     @app.callback(Output("generate", "disabled"), Input("source", "data"))
     def enable_generate(source):
         return not source
@@ -345,11 +362,11 @@ def create_app():
             return error(str(exc))
         return build_result(built, source["session"])
 
-    @app.server.route("/files/<session_id>/<kind>")
-    def serve_file(session_id, kind):
-        # The files go over plain HTTP rather than base64 inside a callback response, as they can be large
+    @app.server.route("/files/<session_id>")
+    def serve_zip(session_id):
+        # The ZIP goes over plain HTTP rather than base64 inside a callback response, as it can be large
         try:
-            path = service.built_file(session_id, kind)
+            path = service.built_zip(session_id)
         except service.ImageError:
             abort(404)
         return send_file(path, as_attachment=True, download_name=path.name)
@@ -364,4 +381,10 @@ def main(argv=None):
     parser.add_argument("--port", type=int, default=8051, help="port to listen on (default 8051)")
     parser.add_argument("--debug", action="store_true", help="enable the Dash hot reload and debug panel")
     args = parser.parse_args(argv)
-    create_app().run(host=args.host, port=args.port, debug=args.debug)
+    app = create_app()
+    if args.debug:
+        app.run(host=args.host, port=args.port, debug=True)
+        return
+    # Not the development server of Dash, which sometimes resets the connection while sending plotly.min.js
+    print(f"Paint by numbers is running on http://{args.host}:{args.port}/", flush=True)
+    serve(app.server, host=args.host, port=args.port, threads=8)

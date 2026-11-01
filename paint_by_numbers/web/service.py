@@ -17,6 +17,7 @@ import tempfile
 import time
 import urllib.request
 import uuid
+import zipfile
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
@@ -24,7 +25,7 @@ import cv2
 import numpy as np
 
 from ..canvas import Canvas
-from ..export import colormap_picture, printed_size
+from ..export import colormap_picture
 from ..preprocessing import resize
 
 SESSION_ROOT = Path(tempfile.gettempdir()) / "paint-by-numbers-web"
@@ -41,7 +42,7 @@ RESULT_DISPLAY_SIZE = 1400
 MIN_CROP_FRACTION = 0.04
 DETAIL_DESCRIPTIONS = {"easy": "Large regions, quick to paint", "medium": "A balance of detail and effort",
                        "faithful": "Small regions, closest to the picture"}
-FILE_SUFFIXES = {"pdf": ".pdf", "canvas": "-canvas.png", "result": "-result.png", "colormap": "-colormap.png"}
+BUILT_SUFFIXES = (".pdf", "-canvas.png", "-result.png", "-colormap.png")
 
 _SESSION_ID = re.compile(r"^[0-9a-f]{32}$")
 
@@ -217,24 +218,24 @@ def render_previews(session_id, nb_color, crop=None):
 
 def build_files(session_id, detail, nb_color, crop=None, pixel_size=4000, title=None, subtitle="", paper="a4",
                 print_size=None):
-    """Generate the canvas at full size, save its files in the session and return what the page shows"""
+    """Generate the canvas at full size, save its files and their ZIP in the session and return what the page shows"""
     canvas = Canvas(working_picture(session_id, crop), nb_color, pixel_size=pixel_size, detail=detail)
     canvas.generate()
-    canvas.save(source_path(session_id).parent / "build", title=title, subtitle=subtitle, paper=paper,
-                print_size=print_size)
-    return {"printed": printed_size(canvas.borders.shape, print_size) if print_size else None,
-            "canvas": data_uri(canvas.canvas, RESULT_DISPLAY_SIZE),
+    build = source_path(session_id).parent / "build"
+    canvas.save(build, title=title, subtitle=subtitle, paper=paper, print_size=print_size)
+    with zipfile.ZipFile(build / f"{canvas.namefile}.zip", "w", zipfile.ZIP_DEFLATED) as archive:
+        for suffix in BUILT_SUFFIXES:
+            archive.write(build / f"{canvas.namefile}{suffix}", f"{canvas.namefile}{suffix}")
+    return {"canvas": data_uri(canvas.canvas, RESULT_DISPLAY_SIZE),
             "result": data_uri(canvas.quantified_image, RESULT_DISPLAY_SIZE),
             "colormap": data_uri(colormap_picture(canvas.colormap)),
             "regions": len(canvas.regions), "colors": len(canvas.colormap)}
 
 
-def built_file(session_id, kind):
-    """Returns the path of a file written by build_files, kind being one of FILE_SUFFIXES"""
-    if kind not in FILE_SUFFIXES:
-        raise ImageError("Unknown file.")
+def built_zip(session_id):
+    """Returns the path of the ZIP written by build_files"""
     path = source_path(session_id)
-    built = path.parent / "build" / f"{path.stem}{FILE_SUFFIXES[kind]}"
+    built = path.parent / "build" / f"{path.stem}.zip"
     if not built.is_file():
         raise ImageError("This file has not been built yet.")
     return built
