@@ -13,36 +13,47 @@ A quick Python tool to transform any picture in a paint-by-number canvas, using 
 2) K-mean algorithm, in the CIELAB color space, to detect the k-colors summarizing the best the picture, merging the colors too close to tell apart  
 3) Transformation of the picture to match these colors, with smoothed borders  
 4) Regions too small or too thin to be painted are merged into their neighbour of closest color  
-5) Drawing of the borders and of the label of each region on a new canvas  
+5) Drawing of the borders and of the label of each region on a new canvas, repeated in the large regions  
 6) Creation of the colormap for the user, sorted by hue and lightness, and of a printable PDF (palette page, then vector canvas page)
 
 # This project includes
 A set of PNG pictures in `./inputs` folder, associated canvas and colormaps in the `./outputs` folder
-The definition of the class Canvas in the python script `canvas.py`
+The `paint_by_numbers` package, with the class Canvas in `canvas.py` and each step in its own module: `preprocessing.py`, `colors.py`, `regions.py` and `export.py`, and the web interface in `web/`
 
 ### Requirements:
 - Numpy
 - Matplotlib
 - OpenCV
 - scikit-learn
+- Dash and Dash Mantine Components, for the web interface
 
 Dependencies are managed with [uv](https://docs.astral.sh/uv/). Install them with `uv sync`.
 
+### Web interface:
+run `uv run app.py [--host H] [--port N] [--debug]`, then open http://127.0.0.1:8051
+
+Upload a picture or paste a link to one, crop it if you want, compare the detail levels side by side, choose the printed size, then download the PDF and the pictures.
+
 ### Execution:
-run `uv run run.py path nb_color [--plot] [--no-save] [--pixel-size N] [--output-dir DIR] [--no-pdf] [--title T] [--subtitle S] [--paper P]` with:
+run `uv run run.py path nb_color [--plot] [--no-save] [--pixel-size N] [--detail D] [--output-dir DIR] [--no-pdf] [--title T] [--subtitle S] [--paper P] [--print-size S]` with:
 
   **path**: path of the source picture  
   **nb_color** : number of colors you want in the canvas (10 to 20)  
   **--plot**: optional, show the results in plots  
   **--no-save**: optional, do not save the results in the output folder  
   **--pixel-size**: optional, integer, size in pixel of the largest dimension of the output canvas (default 4000)  
+  **--detail**: optional, balance between easy to paint and faithful to the picture: `easy`, `medium` or `faithful` (default `medium`)  
   **--output-dir**: optional, folder where results are saved (default `./outputs`)  
   **--no-pdf**: optional, do not save the printable PDF  
   **--title**: optional, title printed in the PDF (default: name of the picture)  
   **--subtitle**: optional, subtitle printed in the PDF, e.g. the artist and year  
-  **--paper**: optional, PDF paper size: `a4`, `a3` or `letter` (default `a4`)
+  **--paper**: optional, PDF paper size: `a4`, `a3` or `letter` (default `a4`)  
+  **--print-size**: optional, standard canvas size in inches: `8x10`, `9x12`, `11x14`, `12x16`, `16x20`, `18x24` or `24x36`. The PDF canvas page gets exactly this size, without margins, and the palette stays on the paper size (default: the canvas fits the paper)
 
 Example: `uv run run.py inputs/chirico.jpg 20 --title "Place d'Italie" --subtitle "Giorgio De Chirico, 1922"`
+
+### Tests:
+run `uv run pytest`
 
 ### Result:
 
@@ -60,6 +71,4 @@ Palette page, then vector canvas page:
 - [Paysage](outputs/paysage.pdf)
 
 ### Next Steps:
-- Repeat the label in large or elongated regions
-- Difficulty choice: a detail level between faithful and easy to paint (`--detail` option)
-- Web interface with Dash: upload a picture, tune the options, preview and download the results and the PDF
+See the [roadmap](ROADMAP.md).

@@ -3,8 +3,21 @@ name = "paint-by-numbers"
 version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
+    "dash>=4.5.0",
+    "dash-mantine-components>=2.8.1,<3",
     "matplotlib>=3.11.2",
     "numpy>=2.5.4",
     "opencv-python>=5.0.0.93",
     "scikit-learn>=1.9.1",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+# Dash ships a pytest plugin for browser testing, which is not used here
+addopts = "-p no:dash"
