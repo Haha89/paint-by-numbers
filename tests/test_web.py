@@ -1,0 +1,256 @@
+# -*- coding: utf-8 -*-
+
+import base64
+import http.server
+import threading
+import urllib.request
+
+import cv2
+import numpy as np
+import pytest
+
+from paint_by_numbers.web import service
+from paint_by_numbers.web.app import create_app, next_crop_box
+
+
+@pytest.fixture(autouse=True)
+def session_root(tmp_path, monkeypatch):
+    monkeypatch.setattr(service, "SESSION_ROOT", tmp_path / "sessions")
+
+
+@pytest.fixture
+def session(picture_path):
+    return service.save_source(picture_path.read_bytes(), "my picture.png")
+
+
+def test_upload_is_decoded():
+    contents = "data:image/png;base64," + base64.b64encode(b"data").decode()
+    assert service.image_bytes_from_upload(contents) == b"data"
+
+
+def test_invalid_upload_is_rejected():
+    with pytest.raises(service.ImageError):
+        service.image_bytes_from_upload("data:image/png;base64,not base64!")
+
+
+def test_too_large_upload_is_rejected(monkeypatch):
+    monkeypatch.setattr(service, "MAX_IMAGE_BYTES", 2)
+    with pytest.raises(service.ImageError, match="too large"):
+        service.image_bytes_from_upload("data:image/png;base64," + base64.b64encode(b"data").decode())
+
+
+def test_file_which_is_not_a_picture_is_rejected():
+    with pytest.raises(service.ImageError, match="not a supported picture"):
+        service.save_source(b"not a picture", "notes.txt")
+
+
+@pytest.mark.parametrize("name, expected", [("my picture.png", "my_picture"), ("../../evil.png", "evil"),
+                                            ("été.jpg", "t"), ("....png", "picture")])
+def test_file_names_are_made_safe(name, expected):
+    assert service.safe_stem(name) == expected
+
+
+def test_source_is_stored_shrunk(tmp_path, monkeypatch):
+    path = tmp_path / "large.png"
+    cv2.imwrite(str(path), np.zeros((50, 100, 3), dtype=np.uint8))
+    monkeypatch.setattr(service, "MAX_SOURCE_SIZE", 40)
+    session = service.save_source(path.read_bytes(), "large.png")
+    assert cv2.imread(str(service.source_path(session))).shape[:2] == (20, 40)
+
+
+@pytest.mark.parametrize("session_id", ["../..", "abc", None, "g" * 32])
+def test_invalid_session_is_rejected(session_id):
+    with pytest.raises(service.ImageError, match="Invalid session"):
+        service.source_path(session_id)
+
+
+def test_unknown_session_is_rejected():
+    with pytest.raises(service.ImageError, match="not found"):
+        service.source_path("0" * 32)
+
+
+def test_old_sessions_are_purged(session):
+    folder = service.source_path(session).parent
+    service.purge_old_sessions(folder.stat().st_mtime + service.SESSION_TTL_SECONDS - 1)
+    assert folder.exists()
+    service.purge_old_sessions(folder.stat().st_mtime + service.SESSION_TTL_SECONDS + 1)
+    assert not folder.exists()
+
+
+@pytest.mark.parametrize("crop, expected", [
+    (None, None),
+    ([0, 0, 1, 1], None),
+    ([0.5, 0.5, 0.51, 0.9], None),
+    ([0.2, 0.3, 0.6, 0.8], (0.2, 0.3, 0.6, 0.8)),
+    ([0.6, 0.8, 0.2, 0.3], (0.2, 0.3, 0.6, 0.8)),
+    ([-1, -1, 0.5, 2], (0.0, 0.0, 0.5, 1.0))])
+def test_validate_crop(crop, expected):
+    assert service.validate_crop(crop) == expected
+
+
+def test_working_picture_is_cropped(session):
+    path = service.working_picture(session, [0.5, 0, 1, 0.5])
+    assert cv2.imread(str(path)).shape[:2] == (200, 300)
+    assert path.name == service.source_path(session).name
+
+
+def test_working_picture_without_crop_is_the_source(session):
+    assert service.working_picture(session, None) == service.source_path(session)
+
+
+def test_previews_compare_the_detail_levels(session):
+    previews = service.render_previews(session, 5)
+    assert [preview["detail"] for preview in previews] == ["easy", "medium", "faithful"]
+    assert all(preview["image"].startswith("data:image/png;base64,") for preview in previews)
+    assert previews[0]["regions"] < previews[-1]["regions"]
+
+
+def test_build_files_then_get_them(session):
+    built = service.build_files(session, "easy", 5, pixel_size=600, title="A title")
+    assert built["regions"] > 0
+    for kind in service.FILE_SUFFIXES:
+        assert service.built_file(session, kind).is_file()
+    assert service.built_file(session, "pdf").read_bytes().startswith(b"%PDF")
+
+
+def test_build_files_uses_the_crop(session):
+    service.build_files(session, "easy", 5, crop=[0, 0, 0.25, 1], pixel_size=600)
+    # A quarter of the 600x400 picture is 150x400, which is then scaled to 600 pixels high
+    assert cv2.imread(str(service.built_file(session, "canvas"))).shape[:2] == (600, 225)
+
+
+def test_build_files_reports_the_printed_size(session):
+    built = service.build_files(session, "easy", 5, pixel_size=600, print_size="16x20")
+    # The 600x400 picture is landscape, on a 20x16 page: the width is the limit
+    assert built["printed"] == pytest.approx((20, 40 / 3))
+
+
+def test_build_files_without_print_size_has_no_printed_size(session):
+    assert service.build_files(session, "easy", 5, pixel_size=600)["printed"] is None
+
+
+@pytest.mark.parametrize("host, expected", [("127.0.0.1", False), ("localhost", False), ("192.168.1.10", False),
+                                            ("169.254.169.254", False), ("::1", False), ("8.8.8.8", True)])
+def test_only_public_hosts_are_accepted(host, expected):
+    assert service.is_public_host(host) is expected
+
+
+@pytest.mark.parametrize("url, message", [("ftp://example.com/a.png", "must start"), ("file:///etc/passwd", "must start"),
+                                          ("not a link", "must start"), ("http://127.0.0.1:8051/a.png", "can't be reached"),
+                                          ("http://localhost/a.png", "can't be reached")])
+def test_invalid_links_are_rejected(url, message):
+    with pytest.raises(service.ImageError, match=message):
+        service.image_bytes_from_url(url)
+
+
+def test_redirect_to_a_private_address_is_rejected():
+    request = urllib.request.Request("http://example.com/a.png")
+    with pytest.raises(service.ImageError, match="can't be reached"):
+        service.PublicRedirectHandler().redirect_request(request, None, 302, "Found", {}, "http://127.0.0.1/secret")
+
+
+@pytest.fixture
+def picture_server(picture_path, monkeypatch):
+    """A local server for the picture, seen as public, which also redirects and fails"""
+    content = picture_path.read_bytes()
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path == "/moved":
+                self.send_response(302)
+                self.send_header("Location", "/my%20picture.png?size=large")
+            elif self.path.startswith("/my%20picture.png"):
+                self.send_response(200)
+            else:
+                self.send_response(404)
+            self.end_headers()
+            if self.path.startswith("/my%20picture.png"):
+                self.wfile.write(content)
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    monkeypatch.setattr(service, "is_public_host", lambda host: True)
+    yield f"http://127.0.0.1:{server.server_port}", content
+    server.shutdown()
+
+
+@pytest.mark.parametrize("path", ["/my%20picture.png?size=large", "/moved"])
+def test_picture_is_downloaded_from_a_link(picture_server, path):
+    base, content = picture_server
+    assert service.image_bytes_from_url(f"  {base}{path}  ") == content
+
+
+def test_missing_link_is_rejected(picture_server):
+    with pytest.raises(service.ImageError, match="can't be downloaded"):
+        service.image_bytes_from_url(f"{picture_server[0]}/missing.png")
+
+
+def test_too_large_download_is_rejected(picture_server, monkeypatch):
+    monkeypatch.setattr(service, "MAX_IMAGE_BYTES", 10)
+    with pytest.raises(service.ImageError, match="too large"):
+        service.image_bytes_from_url(f"{picture_server[0]}/my%20picture.png")
+
+
+@pytest.mark.parametrize("url, expected", [("https://a.com/b/my%20photo.jpg?x=1", "my photo.jpg"),
+                                           ("https://a.com/", "picture"), ("https://a.com", "picture")])
+def test_name_from_url(url, expected):
+    assert service.name_from_url(url) == expected
+
+
+def test_file_not_built_yet_is_rejected(session):
+    with pytest.raises(service.ImageError, match="not been built"):
+        service.built_file(session, "pdf")
+
+
+def test_unknown_file_kind_is_rejected(session):
+    with pytest.raises(service.ImageError, match="Unknown"):
+        service.built_file(session, "secret")
+
+
+def test_drawn_crop_box_is_clamped_to_the_picture():
+    box = next_crop_box({"shapes": [{"x0": -10, "y0": 9.5, "x1": 49.5, "y1": 500}]}, None, 100, 80)
+    assert box == (0.0, 10.0, 50.0, 80.0)
+
+
+def test_moved_crop_box_keeps_the_other_sides():
+    current = {"x0": 9.5, "y0": 9.5, "x1": 19.5, "y1": 19.5}
+    assert next_crop_box({"shapes[0].x1": 29.5}, current, 100, 80) == (10.0, 10.0, 30.0, 20.0)
+
+
+def test_erased_crop_box_means_no_crop():
+    assert next_crop_box({"shapes": []}, {"x0": 0, "y0": 0, "x1": 1, "y1": 1}, 100, 80) is None
+
+
+def test_other_graph_events_do_not_touch_the_crop():
+    assert next_crop_box({"autosize": True}, None, 100, 80) is False
+
+
+def test_app_page_and_stylesheet_are_served():
+    client = create_app().server.test_client()
+    assert client.get("/").status_code == 200
+    assert b"Paint by numbers" in client.get("/_dash-layout").data
+    assert client.get("/assets/style.css").status_code == 200
+
+
+def test_built_file_is_served_for_download(session):
+    service.build_files(session, "easy", 5, pixel_size=600)
+    response = create_app().server.test_client().get(f"/files/{session}/pdf")
+    assert response.status_code == 200
+    assert response.data.startswith(b"%PDF")
+    assert "attachment" in response.headers["Content-Disposition"]
+
+
+@pytest.mark.parametrize("url", ["/files/{session}/pdf", "/files/{session}/secret", "/files/not-a-session/pdf"])
+def test_unavailable_files_are_not_served(session, url):
+    assert create_app().server.test_client().get(url.format(session=session)).status_code == 404
+
+
+def test_path_traversal_only_reaches_the_page(session):
+    # The URL is normalized outside of /files, where Dash answers any path with its page
+    service.build_files(session, "easy", 5, pixel_size=600)
+    response = create_app().server.test_client().get(f"/files/..%2F{session}/pdf")
+    assert "Content-Disposition" not in response.headers
+    assert response.mimetype == "text/html"

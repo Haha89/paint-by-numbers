@@ -1,0 +1,61 @@
+/* The few things Mantine doesn't style. Dash serves every file in this folder automatically. */
+
+body {
+    background: #f6f7f9;
+}
+
+/* Step 1: the upload drop zone */
+.dropzone {
+    align-items: center;
+    background: #fff;
+    border: 2px dashed #d5d8de;
+    border-radius: 12px;
+    cursor: pointer;
+    display: flex;
+    justify-content: center;
+    min-height: 130px;
+    padding: 1.5rem;
+    transition: border-color 0.15s, background 0.15s;
+}
+
+.dropzone:hover {
+    background: #edf2ff;
+    border-color: #4c6ef5;
+}
+
+.status {
+    margin-top: 1rem;
+}
+
+.status:empty {
+    margin: 0;
+}
+
+/* Step 3: the detail cards are picked by clicking anywhere on them */
+.detail-card {
+    border-radius: 16px;
+    cursor: pointer;
+    transition: transform 0.15s, box-shadow 0.15s;
+}
+
+.detail-card:hover {
+    transform: translateY(-3px);
+}
+
+.detail-card.selected {
+    box-shadow: 0 0 0 3px #4c6ef5, 0 8px 24px rgba(76, 110, 245, 0.18);
+}
+
+.preview-image {
+    display: block;
+    width: 100%;
+}
+
+/* Step 4: the canvas is white, it needs an edge on the white card */
+.result-image {
+    border: 1px solid #e3e5e8;
+    border-radius: 8px;
+    display: block;
+    margin: 1rem auto 0;
+    max-width: 100%;
+}

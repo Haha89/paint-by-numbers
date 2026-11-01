@@ -2,3 +2,5 @@ matplotlib
 numpy
 scikit-learn
 opencv-python
+dash
+dash-mantine-components<3
