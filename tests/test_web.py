@@ -2,15 +2,17 @@
 
 import base64
 import http.server
+import io
 import threading
 import urllib.request
+import zipfile
 
 import cv2
 import numpy as np
 import pytest
 
 from paint_by_numbers.web import service
-from paint_by_numbers.web.app import create_app, next_crop_box
+from paint_by_numbers.web.app import FIT_PAPER, create_app, describe_print, next_crop_box
 
 
 @pytest.fixture(autouse=True)
@@ -108,25 +110,47 @@ def test_previews_compare_the_detail_levels(session):
 def test_build_files_then_get_them(session):
     built = service.build_files(session, "easy", 5, pixel_size=600, title="A title")
     assert built["regions"] > 0
-    for kind in service.FILE_SUFFIXES:
-        assert service.built_file(session, kind).is_file()
-    assert service.built_file(session, "pdf").read_bytes().startswith(b"%PDF")
+    with zipfile.ZipFile(service.built_zip(session)) as archive:
+        assert sorted(archive.namelist()) == ["my_picture-canvas.png", "my_picture-colormap.png",
+                                              "my_picture-result.png", "my_picture.pdf"]
+        assert archive.testzip() is None
+        assert archive.read("my_picture.pdf").startswith(b"%PDF")
 
 
 def test_build_files_uses_the_crop(session):
     service.build_files(session, "easy", 5, crop=[0, 0, 0.25, 1], pixel_size=600)
+    with zipfile.ZipFile(service.built_zip(session)) as archive:
+        canvas = np.frombuffer(archive.read("my_picture-canvas.png"), dtype=np.uint8)
     # A quarter of the 600x400 picture is 150x400, which is then scaled to 600 pixels high
-    assert cv2.imread(str(service.built_file(session, "canvas"))).shape[:2] == (600, 225)
+    assert cv2.imdecode(canvas, cv2.IMREAD_GRAYSCALE).shape == (600, 225)
 
 
-def test_build_files_reports_the_printed_size(session):
-    built = service.build_files(session, "easy", 5, pixel_size=600, print_size="16x20")
-    # The 600x400 picture is landscape, on a 20x16 page: the width is the limit
-    assert built["printed"] == pytest.approx((20, 40 / 3))
+SOURCE = {"width": 600, "height": 400}
 
 
-def test_build_files_without_print_size_has_no_printed_size(session):
-    assert service.build_files(session, "easy", 5, pixel_size=600)["printed"] is None
+def test_print_estimate_without_a_picture():
+    assert "Choose a picture" in describe_print(None, None, "16x20", "letter")
+
+
+def test_print_estimate_on_a_standard_size():
+    # The 600x400 landscape picture is limited by the width of the 20x16 page
+    text = describe_print(SOURCE, None, "16x20", "letter")
+    assert "20.0 x 13.3 in (51 x 34 cm)" in text
+    assert "83% of the 16 x 20 in page" in text
+
+
+def test_print_estimate_follows_the_crop():
+    # Cropped to 500x400: the 5:4 shape of the page
+    assert "20.0 x 16.0 in" in (text := describe_print(SOURCE, [0, 0, 5 / 6, 1], "16x20", "letter"))
+    assert "filling the page" in text
+
+
+def test_print_estimate_when_fitting_the_paper():
+    text = describe_print(SOURCE, None, FIT_PAPER, "letter")
+    # Letter in landscape, with the margins and the header
+    assert "9.8 x 6.5 in" in text
+    assert "on a Letter sheet" in text
+    assert "on a A4 sheet" in describe_print(SOURCE, None, FIT_PAPER, "a4")
 
 
 @pytest.mark.parametrize("host, expected", [("127.0.0.1", False), ("localhost", False), ("192.168.1.10", False),
@@ -202,12 +226,7 @@ def test_name_from_url(url, expected):
 
 def test_file_not_built_yet_is_rejected(session):
     with pytest.raises(service.ImageError, match="not been built"):
-        service.built_file(session, "pdf")
-
-
-def test_unknown_file_kind_is_rejected(session):
-    with pytest.raises(service.ImageError, match="Unknown"):
-        service.built_file(session, "secret")
+        service.built_zip(session)
 
 
 def test_drawn_crop_box_is_clamped_to_the_picture():
@@ -235,15 +254,16 @@ def test_app_page_and_stylesheet_are_served():
     assert client.get("/assets/style.css").status_code == 200
 
 
-def test_built_file_is_served_for_download(session):
+def test_built_zip_is_served_for_download(session):
     service.build_files(session, "easy", 5, pixel_size=600)
-    response = create_app().server.test_client().get(f"/files/{session}/pdf")
+    response = create_app().server.test_client().get(f"/files/{session}")
     assert response.status_code == 200
-    assert response.data.startswith(b"%PDF")
+    assert zipfile.ZipFile(io.BytesIO(response.data)).testzip() is None
+    assert "my_picture.zip" in response.headers["Content-Disposition"]
     assert "attachment" in response.headers["Content-Disposition"]
 
 
-@pytest.mark.parametrize("url", ["/files/{session}/pdf", "/files/{session}/secret", "/files/not-a-session/pdf"])
+@pytest.mark.parametrize("url", ["/files/{session}", "/files/not-a-session"])
 def test_unavailable_files_are_not_served(session, url):
     assert create_app().server.test_client().get(url.format(session=session)).status_code == 404
 
@@ -251,6 +271,6 @@ def test_unavailable_files_are_not_served(session, url):
 def test_path_traversal_only_reaches_the_page(session):
     # The URL is normalized outside of /files, where Dash answers any path with its page
     service.build_files(session, "easy", 5, pixel_size=600)
-    response = create_app().server.test_client().get(f"/files/..%2F{session}/pdf")
+    response = create_app().server.test_client().get(f"/files/..%2F{session}")
     assert "Content-Disposition" not in response.headers
     assert response.mimetype == "text/html"

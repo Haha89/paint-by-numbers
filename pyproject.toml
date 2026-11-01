@@ -9,10 +9,12 @@ dependencies = [
     "numpy>=2.5.4",
     "opencv-python>=5.0.0.93",
     "scikit-learn>=1.9.1",
+    "waitress>=3.0.2",
 ]
 
 [dependency-groups]
 dev = [
+    "playwright>=1.64.1",
     "pytest>=9.2.0",
 ]
 

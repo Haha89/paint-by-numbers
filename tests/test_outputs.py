@@ -72,6 +72,11 @@ def test_printed_size_fits_the_canvas_in_its_orientation():
     assert printed_size((750, 600), "16x20") == pytest.approx((16, 20))
 
 
+def test_printed_size_on_the_paper_leaves_the_margins_and_the_header():
+    # A landscape picture on a landscape Letter page: 11 - 2 x 0.6 inches wide
+    assert printed_size((400, 600), paper="letter") == pytest.approx((9.8, 9.8 * 2 / 3))
+
+
 def test_cli_print_size(picture_path, tmp_path):
     result = run_cli(picture_path, 5, "--pixel-size", 600, "--print-size", "8x10", "--output-dir", tmp_path)
     assert result.returncode == 0, result.stderr

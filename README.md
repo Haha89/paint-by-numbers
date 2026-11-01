@@ -32,7 +32,7 @@ Dependencies are managed with [uv](https://docs.astral.sh/uv/). Install them wit
 ### Web interface:
 run `uv run app.py [--host H] [--port N] [--debug]`, then open http://127.0.0.1:8051
 
-Upload a picture or paste a link to one, crop it if you want, compare the detail levels side by side, choose the printed size, then download the PDF and the pictures.
+Upload a picture or paste a link to one, crop it if you want, compare the detail levels side by side, choose the printed size, then download the PDF and the pictures in a ZIP.
 
 ### Execution:
 run `uv run run.py path nb_color [--plot] [--no-save] [--pixel-size N] [--detail D] [--output-dir DIR] [--no-pdf] [--title T] [--subtitle S] [--paper P] [--print-size S]` with:
@@ -53,7 +53,7 @@ run `uv run run.py path nb_color [--plot] [--no-save] [--pixel-size N] [--detail
 Example: `uv run run.py inputs/chirico.jpg 20 --title "Place d'Italie" --subtitle "Giorgio De Chirico, 1922"`
 
 ### Tests:
-run `uv run pytest`
+run `uv run pytest`. The browser tests use your installed Chrome, and are skipped without it.
 
 ### Result:
 
