@@ -41,7 +41,7 @@ RESULT_DISPLAY_SIZE = 1400
 # A crop narrower or shorter than this share of the picture is a stray click
 MIN_CROP_FRACTION = 0.04
 DETAIL_DESCRIPTIONS = {"easy": "Large regions, quick to paint", "medium": "A balance of detail and effort",
-                       "faithful": "Small regions, closest to the picture"}
+                       "detailed": "Small regions, closest to the picture"}
 BUILT_SUFFIXES = (".pdf", "-canvas.png", "-result.png", "-colormap.png")
 
 _SESSION_ID = re.compile(r"^[0-9a-f]{32}$")

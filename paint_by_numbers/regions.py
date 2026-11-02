@@ -29,8 +29,12 @@ def smooth_labels(labels, nb_color, smoothing_ratio):
     return vote(labels, nb_color, lambda mask: cv2.GaussianBlur(mask, (0, 0), sigma))
 
 
-def merge_small_regions(labels, colors, min_region_ratio, min_width_ratio, max_iter=3):
+def merge_small_regions(labels, colors, min_region_ratio, min_width_ratio, max_iter=3, protected=None,
+                        protected_scale=1):
     """Give the regions too small or too thin to be painted the color of their closest large neighbour
+
+    The minimum area and width are multiplied by protected_scale for the regions mostly inside the protected mask, to
+    keep small details which matter, like the eyes of a face.
 
     Returns the merged labels, their borders, the distance to the borders and the regions (see label_regions)
     """
@@ -48,6 +52,12 @@ def merge_small_regions(labels, colors, min_region_ratio, min_width_ratio, max_i
         is_wide = np.zeros(len(stats), dtype=bool)
         is_wide[ids[dist >= min_radius]] = True
         small_regions = (stats[:, cv2.CC_STAT_AREA] < min_area) | ~is_wide
+        if protected is not None:
+            inside = np.bincount(ids[protected], minlength=len(stats)) > stats[:, cv2.CC_STAT_AREA] / 2
+            is_wide_enough = np.zeros(len(stats), dtype=bool)
+            is_wide_enough[ids[dist >= protected_scale * min_radius]] = True
+            small_inside = (stats[:, cv2.CC_STAT_AREA] < protected_scale * min_area) | ~is_wide_enough
+            small_regions = np.where(inside, small_inside, small_regions)
         small = small_regions[ids]
         if not small.any() or small.all():
             break

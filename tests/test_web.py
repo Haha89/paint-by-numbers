@@ -103,7 +103,7 @@ def test_working_picture_without_crop_is_the_source(session):
 
 def test_previews_compare_the_detail_levels(session):
     previews = service.render_previews(session, 5)
-    assert [preview["detail"] for preview in previews] == ["easy", "medium", "faithful"]
+    assert [preview["detail"] for preview in previews] == ["easy", "medium", "detailed"]
     assert all(preview["image"].startswith("data:image/png;base64,") for preview in previews)
     assert previews[0]["regions"] < previews[-1]["regions"]
 
@@ -277,7 +277,7 @@ def test_path_traversal_only_reaches_the_page(session):
     assert response.mimetype == "text/html"
 
 
-CROWDED = {"easy": {"8x10": 0.1, "a4": 0.9}, "faithful": {"8x10": 0.6}}
+CROWDED = {"easy": {"8x10": 0.1, "a4": 0.9}, "detailed": {"8x10": 0.6}}
 
 
 def test_no_crowding_warning_without_a_choice_or_under_the_threshold():
@@ -287,7 +287,7 @@ def test_no_crowding_warning_without_a_choice_or_under_the_threshold():
 
 
 def test_crowding_warning_gives_the_share_for_the_size_or_the_paper():
-    assert "60%" in describe_crowding(CROWDED, "faithful", "8x10", "a4").children
+    assert "60%" in describe_crowding(CROWDED, "detailed", "8x10", "a4").children
     assert "90%" in describe_crowding(CROWDED, "easy", FIT_PAPER, "a4").children
 
 
@@ -308,11 +308,11 @@ def test_fill_crop_box_stays_in_the_current_crop():
     assert box == pytest.approx((325, 0, 575, 200))
 
 
-def test_frame_size_gives_the_page_and_the_picture_on_it():
+def test_frame_fits_the_picture_without_white_bands():
     assert frame_size(None, None, "16x20", "letter") is None
     size = frame_size({"width": 600, "height": 400}, None, "16x20", "letter")
-    assert size["page"] == [20, 16]
     assert size["picture"] == pytest.approx([20, 40 / 3])
+    assert size["page"] == size["picture"]
 
 
 def test_frame_size_on_the_paper_is_the_picture_itself():

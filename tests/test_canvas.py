@@ -63,13 +63,13 @@ def test_repeats_can_be_disabled(picture_path):
 
 def test_detail_levels_order_the_number_of_regions(picture_path):
     assert (nb_regions(picture_path, "easy") < nb_regions(picture_path, "medium")
-            <= nb_regions(picture_path, "faithful"))
+            <= nb_regions(picture_path, "detailed"))
 
 
 @pytest.mark.parametrize("ratio", ["min_region_ratio", "min_width_ratio"])
 def test_detail_levels_order_the_thresholds(ratio):
     levels = Canvas.detail_levels
-    assert levels["easy"][ratio] > levels["medium"][ratio] > levels["faithful"][ratio]
+    assert levels["easy"][ratio] > levels["medium"][ratio] > levels["detailed"][ratio]
 
 
 def test_medium_is_the_default_detail(picture_path):
@@ -117,7 +117,7 @@ def test_missing_picture_is_rejected(tmp_path):
 
 
 def test_min_color_share_comes_from_the_detail_level_and_can_be_overridden(picture_path):
-    assert Canvas(picture_path, 5, detail="easy").min_color_share > Canvas(picture_path, 5, detail="faithful").min_color_share
+    assert Canvas(picture_path, 5, detail="easy").min_color_share > Canvas(picture_path, 5, detail="detailed").min_color_share
     assert Canvas(picture_path, 5, detail="easy", min_color_share=0).min_color_share == 0
 
 
@@ -149,3 +149,19 @@ def test_faces_can_be_disabled():
 def test_no_face_without_the_model(monkeypatch):
     monkeypatch.setattr(faces_module, "MODEL_PATH", Path("missing.onnx"))
     assert faces_module.detect_faces(np.zeros((100, 100, 3), dtype=np.uint8)) == []
+
+
+def test_face_detail_keeps_more_regions_on_a_face():
+    def regions(face_detail):
+        canvas = Canvas(ROOT / "inputs" / "picasso.jpg", 20, pixel_size=1000, face_detail=face_detail)
+        canvas.generate()
+        return len(canvas.regions)
+
+    assert regions(0.25) > regions(1)
+
+
+def test_detail_levels_keep_their_order_of_region_size_inside_a_face():
+    levels = Canvas.detail_levels
+    sizes = [levels[level]["min_region_ratio"] * levels[level]["face_detail"] for level in ("easy", "medium", "detailed")]
+    assert sizes == sorted(sizes, reverse=True)
+    assert all(levels[level]["face_detail"] < 1 for level in levels)

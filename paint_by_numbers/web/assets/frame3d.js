@@ -5,14 +5,15 @@
     "use strict";
 
     const VENDOR = "/assets/vendor/three/";
+    const WOOD = "/assets/vendor/wood/";
     // width in inches on a 20 in canvas, depth of the moulding as a share of its width
     const FRAMES = {
-        oak: {kind: "wood", base: "#b88d57", dark: "#7d5a30", width: 1.5, profile: "flat", roughness: 0.62},
-        pine: {kind: "wood", base: "#dcb980", dark: "#a97f46", width: 1.3, profile: "flat", roughness: 0.68, knots: true},
-        walnut: {kind: "wood", base: "#5f3f28", dark: "#2f1d11", width: 1.6, profile: "scoop", roughness: 0.5},
-        mahogany: {kind: "wood", base: "#6e2c1c", dark: "#3a120b", width: 1.8, profile: "scoop", roughness: 0.38},
-        ebony: {kind: "wood", base: "#26211e", dark: "#0d0b0a", width: 1.2, profile: "flat", roughness: 0.35},
-        whitewashed: {kind: "wood", base: "#dfd9cc", dark: "#a99f8c", width: 1.5, profile: "flat", roughness: 0.75},
+        oak: {kind: "wood", texture: "Wood049", base: "#b88d57", width: 1.5, profile: "flat", roughness: 0.62},
+        pine: {kind: "wood", texture: "Wood049", base: "#dcb980", width: 1.3, profile: "flat", roughness: 0.68},
+        walnut: {kind: "wood", texture: "Wood066", base: "#5f3f28", width: 1.6, profile: "scoop", roughness: 0.5},
+        mahogany: {kind: "wood", texture: "Wood026", base: "#6e2c1c", width: 1.8, profile: "scoop", roughness: 0.38},
+        ebony: {kind: "wood", texture: "Wood051", base: "#26211e", width: 1.2, profile: "flat", roughness: 0.35},
+        whitewashed: {kind: "wood", texture: "Wood049", base: "#dfd9cc", width: 1.5, profile: "flat", roughness: 0.75},
         "old-gold": {kind: "gold", width: 2.2, profile: "stepped", roughness: 0.42},
         "baroque-gold": {kind: "gold", width: 3.4, profile: "baroque", roughness: 0.36, ornate: true},
     };
@@ -25,6 +26,8 @@
             ...arc(0.42, 0.1, 0.28, 0.2), ...arc(0.76, 0.14, 0.06, 0.05), ...arc(0.91, 0.12, 0.09, 0.09), [1, -0.3]],
     };
     const MATTE_WALL = "#e7e1d6";
+    // The mean color of each wood texture, to tint it to the color of a frame
+    const WOOD_MEANS = {Wood051: "#41342e", Wood049: "#7b634e", Wood066: "#593413", Wood026: "#683917"};
 
     function arc(center, height, radiusX, radiusZ) {
         const points = [];
@@ -51,39 +54,6 @@
         canvas.height = height;
         draw(canvas.getContext("2d"), width, height);
         return canvas;
-    }
-
-    function woodGrain(context, width, height, spec, rand, isBump) {
-        context.fillStyle = isBump ? "#808080" : spec.base;
-        context.fillRect(0, 0, width, height);
-        context.strokeStyle = isBump ? "#000000" : spec.dark;
-        // Few wide lines: a side of a frame is thin once on screen, finer grain would blur into a plain color
-        for (let line = 0; line < 42; line++) {
-            const y = rand() * height, wave = 2 + rand() * 7, phase = rand() * 7, period = 120 + rand() * 300;
-            context.globalAlpha = 0.1 + rand() * 0.4;
-            context.lineWidth = 2 + rand() * 7;
-            context.beginPath();
-            // Whole periods, so that the texture repeats without a seam
-            const cycles = Math.max(1, Math.round(width / period));
-            for (let x = 0; x <= width; x += 8) {
-                const offset = wave * Math.sin(phase + x / width * cycles * 2 * Math.PI);
-                x ? context.lineTo(x, y + offset) : context.moveTo(x, y + offset);
-            }
-            context.stroke();
-        }
-        if (spec.knots) {
-            for (let knot = 0; knot < 3; knot++) {
-                const x = rand() * width, y = rand() * height;
-                for (let ring = 7; ring > 0; ring--) {
-                    context.globalAlpha = 0.16;
-                    context.lineWidth = 1.5;
-                    context.beginPath();
-                    context.ellipse(x, y, ring * 5, ring * 2.2, 0, 0, 2 * Math.PI);
-                    context.stroke();
-                }
-            }
-        }
-        context.globalAlpha = 1;
     }
 
     // A repeating scroll with leaves, drawn in the band of the moulding which faces the viewer
@@ -153,17 +123,12 @@
         }
     }
 
-    function frameTextures(THREE, name, spec, maxAnisotropy) {
+    function goldTextures(THREE, name, spec, maxAnisotropy) {
         const rand = random(Object.keys(FRAMES).indexOf(name) * 7919 + 17);
         const color = drawing(1024, 512, (context, width, height) => {
-            if (spec.kind === "gold") goldColor(context, width, height, spec, rand);
-            else woodGrain(context, width, height, spec, rand, false);
+            goldColor(context, width, height, spec, rand);
         });
         const bump = drawing(1024, 512, (context, width, height) => {
-            if (spec.kind === "wood") {
-                woodGrain(context, width, height, spec, rand, true);
-                return;
-            }
             context.fillStyle = "#606060";
             context.fillRect(0, 0, width, height);
             if (spec.ornate) {
@@ -283,15 +248,38 @@
             this.controls.update();
         }
 
+        // Load the photographed wood of a frame, the only part of the viewer coming from files
+        async prepare(frameName) {
+            const spec = FRAMES[frameName];
+            if (spec?.kind !== "wood" || this.textures[spec.texture]) return;
+            const THREE = this.THREE, loader = new THREE.TextureLoader();
+            const [color, normal] = await Promise.all(["color", "normal"].map((kind) =>
+                loader.loadAsync(`${WOOD}${spec.texture}_${kind}.jpg`)));
+            color.colorSpace = THREE.SRGBColorSpace;
+            for (const texture of [color, normal]) {
+                texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+                texture.anisotropy = this.renderer.capabilities.getMaxAnisotropy();
+            }
+            this.textures[spec.texture] = {color, normal};
+        }
+
         material(name, spec) {
             const THREE = this.THREE;
-            this.textures[name] ??= frameTextures(THREE, name, spec, this.renderer.capabilities.getMaxAnisotropy());
+            if (spec.kind === "wood") {
+                const {color: map, normal: normalMap} = this.textures[spec.texture];
+                // The ratio of the frame color to the mean of the texture, in linear colors. It can be above 1
+                const base = new THREE.Color(spec.base), mean = new THREE.Color(WOOD_MEANS[spec.texture]);
+                const color = new THREE.Color(base.r / mean.r, base.g / mean.g, base.b / mean.b);
+                return new THREE.MeshStandardMaterial({
+                    map, normalMap, color, roughness: spec.roughness, normalScale: new THREE.Vector2(0.6, 0.6),
+                });
+            }
+            this.textures[name] ??= goldTextures(THREE, name, spec, this.renderer.capabilities.getMaxAnisotropy());
             const {color, bump} = this.textures[name];
             return new THREE.MeshStandardMaterial({
-                map: color, bumpMap: bump, bumpScale: spec.ornate ? 5 : 0.5, roughness: spec.roughness,
-                metalness: spec.kind === "gold" ? 0.92 : 0,
+                map: color, bumpMap: bump, bumpScale: spec.ornate ? 5 : 0.5, roughness: spec.roughness, metalness: 0.92,
                 // Gold is seen through what it reflects
-                envMapIntensity: spec.kind === "gold" ? 2.6 : 1,
+                envMapIntensity: 2.6,
             });
         }
 
@@ -333,7 +321,7 @@
                 depth = -Math.min(...profile.map(([, up]) => up)) * frameWidth;
                 const page = new THREE.Mesh(new THREE.PlaneGeometry(pageWidth, pageHeight), white);
                 const moulding = new THREE.Mesh(frameGeometry(THREE, pageWidth, pageHeight, frameWidth, profile,
-                    spec.ornate ? 2.8 * frameWidth : 14), this.material(frameName, spec));
+                    spec.ornate ? 2.8 * frameWidth : 16), this.material(frameName, spec));
                 moulding.castShadow = moulding.receiveShadow = true;
                 this.object.add(page, moulding);
                 outerWidth += 2 * frameWidth;
@@ -394,6 +382,7 @@
             const image = new Image();
             image.src = picture.src;
             await image.decode();
+            await shown.prepare(frame);
             if (request === latest) shown.show(image, frame, size);
         }).catch((problem) => {
             console.warn("The 3D preview can't be shown", problem);
