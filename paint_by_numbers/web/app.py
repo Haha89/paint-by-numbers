@@ -15,7 +15,7 @@ from flask import abort, send_file
 from waitress import serve
 
 from ..canvas import Canvas
-from ..export import PRINT_SIZES, fill_crop, oriented, printed_size
+from ..export import fill_crop, printed_size
 from . import service
 
 COLOR_MARKS = [5, 10, 15, 20, 25, 30, 35, 40]
@@ -76,14 +76,15 @@ def cropped_size(source, crop):
 
 
 def frame_size(source, crop, print_size, paper):
-    """What the 3D preview needs, in inches: the (width, height) of the page in the frame and of the picture on it"""
+    """What the 3D preview needs, in inches: the (width, height) of the page in the frame and of the picture on it
+
+    The frame is made to measure around the picture, without the white bands of a page of another shape
+    """
     if not source:
         return None
     width, height = cropped_size(source, crop)
-    standard = None if print_size == FIT_PAPER else print_size
-    picture = printed_size((height, width), standard, paper)
-    page = oriented(PRINT_SIZES[standard], width, height) if standard else picture
-    return {"page": list(page), "picture": list(picture)}
+    picture = list(printed_size((height, width), None if print_size == FIT_PAPER else print_size, paper))
+    return {"page": picture, "picture": picture}
 
 
 def describe_print(source, crop, print_size, paper):
@@ -159,7 +160,7 @@ def layout():
                              "canvas may use a few less.",
         dmc.Stack([
             dmc.Stack([dmc.Text("Number of colors", fw=600, size="sm"),
-                       dmc.Slider(id="nb-color", min=COLOR_MARKS[0], max=COLOR_MARKS[-1], step=1, value=20, mb="md",
+                       dmc.Slider(id="nb-color", min=COLOR_MARKS[0], max=COLOR_MARKS[-1], step=1, value=30, mb="md",
                                   updatemode="drag",  # Keep each value, rather than only the one ending a gesture
                                   marks=[{"value": value, "label": str(value)} for value in COLOR_MARKS])], gap=6),
             dmc.Group(dmc.Button("Update the previews", id="generate", size="md", disabled=True), mt="sm")],

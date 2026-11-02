@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from .colors import merge_rare_colors, quantification, sort_palette
-from .faces import detect_faces
+from .faces import detect_faces, face_mask
 from .export import PAPER_SIZES, PRINT_SIZES, colormap_picture, fill_crop, save_pdf
 from .preprocessing import denoise, resize
 from .regions import find_regions, merge_small_regions, smooth_labels
@@ -29,7 +29,7 @@ class Canvas:
     denoise_size : int, optional, default 1500
         size in pxl of the largest dimension used for denoising
     detail : str, optional, default "medium"
-        balance between easy to paint and faithful to the picture, one of detail_levels. It sets the 4 values below,
+        balance between easy to paint and faithful to the picture, one of detail_levels. It sets the values below,
         unless they are given
     min_region_ratio : float, optional
         regions smaller than this fraction of the picture area are merged into their neighbours
@@ -47,6 +47,9 @@ class Canvas:
     face_weight : float, optional, default 30
         the same for the faces found in the picture, which replace the center. It can be higher, as they surely are a
         subject and cover less of the picture (1 to disable the search of faces)
+    face_detail : float, optional
+        the minimum area and width of the regions are multiplied by this inside the faces, to keep the eyes and the
+        mouth (1 to disable). It comes from the detail level, unless it is given
     nb_samples : int, optional, default 10000
         number of pixels sampled to fit the K-mean
     label_spacing_ratio : float, optional, default 1/6
@@ -61,16 +64,17 @@ class Canvas:
     print_sizes = PRINT_SIZES
     detail_levels = {
         "easy": {"min_region_ratio": 4e-4, "min_width_ratio": 1 / 120, "smoothing_ratio": 1 / 600,
-                 "min_color_share": 0.01},
+                 "min_color_share": 0.01, "face_detail": 0.35},
         "medium": {"min_region_ratio": 1e-4, "min_width_ratio": 1 / 250, "smoothing_ratio": 1 / 1000,
-                   "min_color_share": 0.002},
-        "faithful": {"min_region_ratio": 5e-5, "min_width_ratio": 1 / 400, "smoothing_ratio": 1 / 1000,
-                     "min_color_share": 0},
+                   "min_color_share": 0.002, "face_detail": 0.5},
+        "detailed": {"min_region_ratio": 5e-5, "min_width_ratio": 1 / 400, "smoothing_ratio": 1 / 1000,
+                     "min_color_share": 0, "face_detail": 0.25},
     }
 
     def __init__(self, path_pic, nb_color, pixel_size=4000, denoise_size=1500, detail="medium", min_region_ratio=None,
                  min_width_ratio=None, smoothing_ratio=None, min_color_share=None, min_color_distance=6,
-                 nb_samples=10000, label_spacing_ratio=1 / 6, subject_weight=10, face_weight=30):
+                 nb_samples=10000, label_spacing_ratio=1 / 6, subject_weight=10, face_weight=30,
+                 face_detail=None):
         if not 1 <= nb_color <= 256:
             raise ValueError("nb_color must be between 1 and 256")
         if detail not in self.detail_levels:
@@ -93,6 +97,7 @@ class Canvas:
         self.nb_samples = nb_samples
         self.subject_weight = subject_weight
         self.face_weight = face_weight
+        self.face_detail = preset["face_detail"] if face_detail is None else face_detail
         self.faces = []
         self.label_spacing_ratio = label_spacing_ratio
         self.quantified_image = None
@@ -118,11 +123,14 @@ class Canvas:
         labels, colors = quantification(clean_img, self.nb_color, self.nb_samples, self.min_color_distance,
                                         self.face_weight if self.faces else self.subject_weight, self.faces)
         labels = smooth_labels(labels, len(colors), self.smoothing_ratio)
+        protected = face_mask(labels.shape, self.faces)
         # Merging the regions changes the coverage of the colors, and replacing a color changes the regions
         while True:
             labels, borders, dist, (ids, region_colors, stats) = merge_small_regions(labels, colors,
                                                                                      self.min_region_ratio,
-                                                                                     self.min_width_ratio)
+                                                                                     self.min_width_ratio,
+                                                                                     protected=protected,
+                                                                                     protected_scale=self.face_detail)
             lut = merge_rare_colors(labels, colors, self.min_color_share)
             if lut is None:
                 break

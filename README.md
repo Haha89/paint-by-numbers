@@ -12,7 +12,7 @@ A quick Python tool to transform any picture in a paint-by-number canvas, using 
 1) Picture is resized and denoised with a bilateral filter, which flattens the textures but keeps the edges sharp  
 2) K-mean algorithm, in the CIELAB color space, to detect the k-colors summarizing the best the picture, the faces found in the picture, or else its center, counting more so that the subject gets more shades, merging the colors too close to tell apart  
 3) Transformation of the picture to match these colors, with smoothed borders  
-4) Regions too small or too thin to be painted are merged into their neighbour of closest color, and colors barely used are replaced by their closest color  
+4) Regions too small or too thin to be painted are merged into their neighbour of closest color, with a lower limit inside the faces to keep the eyes and the mouth, and colors barely used are replaced by their closest color  
 5) Drawing of the borders and of the label of each region on a new canvas, repeated in the large regions  
 6) Creation of the colormap for the user, sorted by hue and lightness, and of a printable PDF (palette page with the share of the canvas and the estimated paint of each color, then vector canvas page)
 
@@ -42,7 +42,7 @@ run `uv run run.py path nb_color [--plot] [--no-save] [--pixel-size N] [--detail
   **--plot**: optional, show the results in plots  
   **--no-save**: optional, do not save the results in the output folder  
   **--pixel-size**: optional, integer, size in pixel of the largest dimension of the output canvas (default 4000)  
-  **--detail**: optional, balance between easy to paint and faithful to the picture: `easy`, `medium` or `faithful` (default `medium`)  
+  **--detail**: optional, balance between easy to paint and faithful to the picture: `easy`, `medium` or `detailed` (default `medium`)  
   **--output-dir**: optional, folder where results are saved (default `./outputs`)  
   **--no-pdf**: optional, do not save the printable PDF  
   **--title**: optional, title printed in the PDF (default: name of the picture)  

@@ -13,10 +13,13 @@
 
 ## Done
 
+- **Face details**: the minimum size of the regions is lower inside the faces, to keep the eyes and the mouth: about 3 times lower for `easy`, 2 times for `medium` and 4 times for `detailed`, which still leaves the 3 levels in that order of region size
+- **30 colors by default**: in the web interface, for softer shading. More adds little, as the closest colors get merged
+- **Photographed wood**: the wood frames of the 3D preview use CC0 textures from ambientCG
 - **Subject weighting**: the faces of the picture, found with the YuNet model, or else its center, count 10 times more when choosing the colors, so that a face gets more shades and fewer large flat shapes
 - **Framed 3D preview**: the painting at its real size on a wall with Three.js, with wood and gold frames
 - **More K-mean samples**: 10000 pixels rather than 1000, for lower color errors on both the subject and the background. Capping the weight of the big uniform areas was measured too, and left out: little gain on the subject, for a clear loss on the background
-- **Merge rarely used colors**: colors under a share of the canvas are replaced by their closest color, 1% for `easy`, 0.2% for `medium`, none for `faithful`
+- **Merge rarely used colors**: colors under a share of the canvas are replaced by their closest color, 1% for `easy`, 0.2% for `medium`, none for `detailed`
 - **Paint quantities**: the PDF palette page shows the share of the canvas and the estimated paint of each color for the print size
 - **Crop to the printed size**: a button in the web interface and `--crop-to-fill`, to avoid white bands
 - **Warning for small prints**: the web interface says when many labels will touch the borders at the chosen size and detail level
@@ -28,5 +31,5 @@
 - **Web interface with Dash**: upload a picture or give a link, crop it, compare the detail levels, preview and download the results and the PDF, with `uv run app.py`
 - **Tests**: fast checks on small generated pictures, run with `uv run pytest`
 - **Repeated labels**: large regions get several labels, spaced by `label_spacing_ratio` (1/6 of the largest dimension by default, 0 to disable)
-- **Detail level**: `--detail easy|medium|faithful`, a balance between easy to paint and faithful to the picture
+- **Detail level**: `--detail easy|medium|detailed`, a balance between easy to paint and faithful to the picture
 - **Package**: `canvas.py` split into the `paint_by_numbers` package

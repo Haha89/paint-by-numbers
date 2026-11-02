@@ -4,6 +4,7 @@ import numpy as np
 
 from paint_by_numbers.colors import (merge_close_colors, merge_rare_colors, quantification, rgb_to_lab, sort_palette,
                                      subject_weights)
+from paint_by_numbers.faces import face_mask
 from paint_by_numbers.preprocessing import resize, target_dim
 from paint_by_numbers.regions import (distance_to_borders, find_borders, find_regions, label_regions,
                                       merge_small_regions)
@@ -176,3 +177,34 @@ def test_subject_weight_gives_the_center_its_own_colors():
 
     assert center_colors(1) == 1
     assert center_colors(10) == 2
+
+
+def speck_on_a_background():
+    colors = np.array([[0, 0, 0], [255, 255, 255]], dtype=np.uint8)
+    labels = np.zeros((100, 100), dtype=np.uint8)
+    labels[10:16, 10:16] = 1
+    labels[80:86, 80:86] = 1
+    return labels, colors
+
+
+def test_merge_small_regions_keeps_the_details_of_a_protected_area():
+    labels, colors = speck_on_a_background()
+    protected = np.zeros(labels.shape, dtype=bool)
+    protected[:50, :50] = True
+    merged, *_ = merge_small_regions(labels, colors, min_region_ratio=0.01, min_width_ratio=0, protected=protected,
+                                     protected_scale=0.25)
+    assert merged[12, 12] == 1
+    assert merged[82, 82] == 0
+
+
+def test_merge_small_regions_treats_everything_alike_without_protection():
+    labels, colors = speck_on_a_background()
+    merged, *_ = merge_small_regions(labels, colors, min_region_ratio=0.01, min_width_ratio=0)
+    assert merged[12, 12] == 0 and merged[82, 82] == 0
+
+
+def test_face_mask_covers_the_faces():
+    mask = face_mask((100, 200), [(0.5, 0.1, 0.25, 0.2)])
+    assert mask.sum() == 50 * 20
+    assert mask[10, 100] and not mask[9, 100] and not mask[10, 99]
+    assert face_mask((100, 200), []) is None

@@ -225,9 +225,9 @@ def test_keyboard_sets_the_number_of_colors(page, picture_path, server_calls):
     slider.focus()
     slider.press("ArrowRight")
     slider.press("ArrowRight")
-    expect(slider).to_have_attribute("aria-valuenow", "22")
+    expect(slider).to_have_attribute("aria-valuenow", "32")
     page.locator("#generate").click()
-    wait_until(lambda: server_calls["previews"][0][1] == 22)
+    wait_until(lambda: server_calls["previews"][0][1] == 32)
 
 
 def test_print_estimate_follows_the_choices_and_the_crop(page, picture_path):
@@ -273,9 +273,9 @@ def test_only_one_card_is_selected_and_it_chooses_the_detail(page, picture_path,
     expect(cards(page).nth(2)).to_have_class("detail-card selected")
     expect(cards(page).nth(0)).to_have_class("detail-card")
     expect(page.locator(".detail-card.selected")).to_have_count(1)
-    expect(cards(page).nth(2)).to_contain_text("Faithful")
+    expect(cards(page).nth(2)).to_contain_text("Detailed")
     build(page)
-    assert server_calls["build"][0][1] == "faithful"
+    assert server_calls["build"][0][1] == "detailed"
 
 
 def test_build_needs_a_selected_card(page, picture_path):
@@ -289,7 +289,7 @@ def test_build_uses_the_colors_of_the_previews_not_the_moved_slider(page, pictur
     upload_and_select(page, picture_path)
     click_first_color_mark(page)
     build(page)
-    assert server_calls["build"][0][2] == 20
+    assert server_calls["build"][0][2] == 30
 
 
 def test_new_previews_clear_the_selection_and_the_build(page, picture_path):
@@ -536,3 +536,16 @@ def test_framed_preview_in_3d(page, picture_path):
     # A new crop makes new previews, so the choice of a level starts over and the viewer goes away with it
     page.locator("#crop-fill").click()
     expect(area).to_be_hidden()
+
+
+def test_wood_frames_load_their_textures(page, picture_path):
+    responses = []
+    page.on("response", lambda response: responses.append(response) if "/vendor/wood/" in response.url else None)
+    upload_and_select(page, picture_path)
+    view = page.locator("#frame-view")
+    expect(view).to_have_attribute("data-rendered", "old-gold")
+    page.locator("#frame").click()
+    page.get_by_role("option", name="Mahogany").click()
+    expect(view).to_have_attribute("data-rendered", "mahogany")
+    assert {response.url.rsplit("/", 1)[1] for response in responses} == {"Wood026_color.jpg", "Wood026_normal.jpg"}
+    assert all(response.ok for response in responses)

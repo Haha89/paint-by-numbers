@@ -16,6 +16,18 @@ DETECTION_SIZE = 640
 MIN_SCORE = 0.6
 
 
+def face_mask(shape, faces):
+    """The pixels of a picture of this (height, width) inside the given faces, or None without any face"""
+    if not len(faces):
+        return None
+    height, width = shape[:2]
+    mask = np.zeros((height, width), dtype=bool)
+    for left, top, box_width, box_height in faces:
+        mask[max(0, round(top * height)):round((top + box_height) * height),
+             max(0, round(left * width)):round((left + box_width) * width)] = True
+    return mask
+
+
 def detect_faces(picture):
     """Returns the faces of an RGB picture as (left, top, width, height) fractions of the picture, largest first
 
