@@ -23,9 +23,15 @@ if __name__ == "__main__":
     parser.add_argument("--print-size", choices=list(Canvas.print_sizes),
                         help="standard canvas size in inches: the PDF canvas page gets exactly this size, without "
                              "margins (default: fit the paper)")
+    parser.add_argument("--crop-to-fill", action="store_true",
+                        help="crop the picture around its center to the shape of --print-size, to avoid white bands")
     args = parser.parse_args()
+    if args.crop_to_fill and not args.print_size:
+        parser.error("--crop-to-fill needs --print-size")
 
     CANVAS = Canvas(args.path, args.nb_color, pixel_size=args.pixel_size, detail=args.detail)
+    if args.crop_to_fill:
+        CANVAS.crop_to_print(args.print_size)
     CANVAS.generate()
     if args.save:
         CANVAS.save(args.output_dir, args.pdf, args.title, args.subtitle, args.paper, args.print_size)

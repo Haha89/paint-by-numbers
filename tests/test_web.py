@@ -12,7 +12,8 @@ import numpy as np
 import pytest
 
 from paint_by_numbers.web import service
-from paint_by_numbers.web.app import FIT_PAPER, create_app, describe_print, next_crop_box
+from paint_by_numbers.web.app import (FIT_PAPER, create_app, describe_crowding, describe_print, fill_crop_box, frame_size,
+                                      next_crop_box)
 
 
 @pytest.fixture(autouse=True)
@@ -274,3 +275,46 @@ def test_path_traversal_only_reaches_the_page(session):
     response = create_app().server.test_client().get(f"/files/..%2F{session}")
     assert "Content-Disposition" not in response.headers
     assert response.mimetype == "text/html"
+
+
+CROWDED = {"easy": {"8x10": 0.1, "a4": 0.9}, "faithful": {"8x10": 0.6}}
+
+
+def test_no_crowding_warning_without_a_choice_or_under_the_threshold():
+    assert describe_crowding(None, None, "8x10", "a4") is None
+    assert describe_crowding(CROWDED, None, "8x10", "a4") is None
+    assert describe_crowding(CROWDED, "easy", "8x10", "a4") is None
+
+
+def test_crowding_warning_gives_the_share_for_the_size_or_the_paper():
+    assert "60%" in describe_crowding(CROWDED, "faithful", "8x10", "a4").children
+    assert "90%" in describe_crowding(CROWDED, "easy", FIT_PAPER, "a4").children
+
+
+def test_previews_give_the_crowded_labels_of_each_size_and_paper(session):
+    crowded = service.render_previews(session, 5)[0]["crowded"]
+    assert {"8x10", "24x36", "a4", "a3", "letter"} <= set(crowded)
+    assert all(0 <= share <= 1 for share in crowded.values())
+    assert crowded["8x10"] >= crowded["24x36"]
+
+
+def test_fill_crop_box_centers_the_page_in_the_picture():
+    box = fill_crop_box({"width": 600, "height": 400}, None, "16x20")
+    assert box == pytest.approx((50, 0, 550, 400))
+
+
+def test_fill_crop_box_stays_in_the_current_crop():
+    box = fill_crop_box({"width": 600, "height": 400}, [0.5, 0, 1, 0.5], "16x20")
+    assert box == pytest.approx((325, 0, 575, 200))
+
+
+def test_frame_size_gives_the_page_and_the_picture_on_it():
+    assert frame_size(None, None, "16x20", "letter") is None
+    size = frame_size({"width": 600, "height": 400}, None, "16x20", "letter")
+    assert size["page"] == [20, 16]
+    assert size["picture"] == pytest.approx([20, 40 / 3])
+
+
+def test_frame_size_on_the_paper_is_the_picture_itself():
+    size = frame_size({"width": 600, "height": 400}, None, FIT_PAPER, "letter")
+    assert size["page"] == pytest.approx(size["picture"])

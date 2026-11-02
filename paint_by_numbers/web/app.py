@@ -10,12 +10,12 @@ from pathlib import Path
 
 import dash_mantine_components as dmc
 import plotly.graph_objects as go
-from dash import ALL, Dash, Input, Output, Patch, State, ctx, dcc, html, no_update
+from dash import ALL, ClientsideFunction, Dash, Input, Output, Patch, State, ctx, dcc, html, no_update
 from flask import abort, send_file
 from waitress import serve
 
 from ..canvas import Canvas
-from ..export import printed_size
+from ..export import PRINT_SIZES, fill_crop, oriented, printed_size
 from . import service
 
 COLOR_MARKS = [5, 10, 15, 20, 25, 30, 35, 40]
@@ -25,6 +25,12 @@ CROP_SHAPE_STYLE = {"line": {"color": "#4c6ef5", "width": 3}, "fillcolor": "rgba
 FONT = "Inter, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif"
 THEME = {"primaryColor": "indigo", "defaultRadius": "md", "fontFamily": FONT, "headings": {"fontFamily": FONT}}
 HIDDEN = {"display": "none"}
+# Only frame3d.js loads the Three.js modules, Dash would break on them by adding them to the page as plain scripts
+THREE_FILES = r"^(three\.module|three\.core|OrbitControls|RoomEnvironment)\.js$"
+# The Three.js modules import each other by this name
+IMPORT_MAP = '<script type="importmap">{"imports": {"three": "/assets/vendor/three/three.module.js"}}</script>'
+# Share of the labels touching their borders from which the page warns about it
+CROWDED_WARNING = 0.25
 
 
 def step(number, title, subtitle, *children):
@@ -45,6 +51,14 @@ def choices(pairs):
     return [{"label": label, "value": value} for label, value in pairs]
 
 
+# The frames of the 3D preview, see assets/frame3d.js
+FRAMES = [{"group": "No frame", "items": [{"label": "Stretched canvas", "value": "none"}]},
+          {"group": "Wood", "items": choices([("Oak", "oak"), ("Pine", "pine"), ("Walnut", "walnut"),
+                                               ("Mahogany", "mahogany"), ("Black ebony", "ebony"),
+                                               ("Whitewashed", "whitewashed")])},
+          {"group": "Gold", "items": choices([("Old gold", "old-gold"), ("Baroque gold", "baroque-gold")])}]
+
+
 def print_size_choices():
     """The standard canvas sizes, in inches and centimeters, and the choice of fitting the paper"""
     sizes = [(f"{width} x {height} in ({width * CM_PER_INCH:.0f} x {height * CM_PER_INCH:.0f} cm)", name)
@@ -52,14 +66,31 @@ def print_size_choices():
     return choices([*sizes, ("Fit the paper, with a title", FIT_PAPER)])
 
 
-def describe_print(source, crop, print_size, paper):
-    """The size the picture will have once printed, for the current crop and choices"""
-    if not source:
-        return "Choose a picture to see its printed size."
+def cropped_size(source, crop):
+    """The (width, height) of the displayed picture once cropped"""
     width, height = source["width"], source["height"]
     if crop:
         left, top, right, bottom = crop
         width, height = width * (right - left), height * (bottom - top)
+    return width, height
+
+
+def frame_size(source, crop, print_size, paper):
+    """What the 3D preview needs, in inches: the (width, height) of the page in the frame and of the picture on it"""
+    if not source:
+        return None
+    width, height = cropped_size(source, crop)
+    standard = None if print_size == FIT_PAPER else print_size
+    picture = printed_size((height, width), standard, paper)
+    page = oriented(PRINT_SIZES[standard], width, height) if standard else picture
+    return {"page": list(page), "picture": list(picture)}
+
+
+def describe_print(source, crop, print_size, paper):
+    """The size the picture will have once printed, for the current crop and choices"""
+    if not source:
+        return "Choose a picture to see its printed size."
+    width, height = cropped_size(source, crop)
     standard = None if print_size == FIT_PAPER else print_size
     printed_width, printed_height = printed_size((height, width), standard, paper)
     text = (f"Printed size: {printed_width:.1f} x {printed_height:.1f} in "
@@ -71,6 +102,26 @@ def describe_print(source, crop, print_size, paper):
     if filled > 0.99:
         return f"{text}, filling the page."
     return f"{text}, {filled:.0%} of the {page_width} x {page_height} in page: crop the picture to fill it."
+
+
+def describe_crowding(crowded, detail, print_size, paper):
+    """A warning when many labels of the chosen detail level will touch the borders at the chosen size"""
+    share = ((crowded or {}).get(detail) or {}).get(paper if print_size == FIT_PAPER else print_size, 0)
+    if share < CROWDED_WARNING:
+        return None
+    return dmc.Alert(f"About {share:.0%} of the numbers will touch the borders of their region at this size. A larger "
+                     "size or a lower detail level would make them easier to read.", color="yellow", variant="light",
+                     radius="md")
+
+
+def fill_crop_box(source, crop, print_size):
+    """The crop box in displayed pixels giving the current crop the shape of a standard size, centered in it"""
+    left, top, right, bottom = crop or (0, 0, 1, 1)
+    left, right = left * source["width"], right * source["width"]
+    top, bottom = top * source["height"], bottom * source["height"]
+    width, height = right - left, bottom - top
+    fill_left, fill_top, fill_right, fill_bottom = fill_crop(width, height, print_size)
+    return left + fill_left * width, top + fill_top * height, left + fill_right * width, top + fill_bottom * height
 
 
 def layout():
@@ -118,8 +169,9 @@ def layout():
                                                "regions are closer to the picture.", html.Div(id="previews"))
 
     download = step(
-        4, "Get your canvas", "The PDF has the palette on a sheet of paper, then the canvas at its printed size. A "
-                              "picture with another shape than the canvas leaves white bands: crop it to fill it.",
+        4, "Get your canvas", "The PDF has the palette with the paint to prepare on a sheet of paper, then the canvas at "
+                              "its printed size. A picture with another shape than the canvas leaves white bands: crop "
+                              "it to fill it.",
         dmc.Stack([
             dmc.SimpleGrid([
                 dmc.TextInput(id="title", label="PDF title", placeholder="Name of the picture"),
@@ -133,7 +185,21 @@ def layout():
                                (name.upper() if name != "letter" else "Letter", name)
                                for name in sorted(Canvas.paper_sizes)))], gap=6)],
                 gap="xl", align="flex-start"),
-            dmc.Text(id="print-estimate", fw=500, size="sm"),
+            dmc.Group([dmc.Text(id="print-estimate", fw=500, size="sm"),
+                       dmc.Button("Crop to fill the page", id="crop-fill", variant="light", size="xs", disabled=True)],
+                      gap="md"),
+            html.Div(id="print-warning"),
+            html.Div([
+                dmc.Group([
+                    dmc.Stack([dmc.Text("See it framed", fw=600, size="sm"),
+                               dmc.Text("Your painting at its real size, once finished. Drag to turn around it, scroll "
+                                        "to get closer. The frame is only a preview: it is not in the files.",
+                                        c="dimmed", size="xs")], gap=0, style={"flex": "1 1 280px"}),
+                    dmc.Select(id="frame", label="Frame", value="old-gold", data=FRAMES, allowDeselect=False, w=220)],
+                    justify="space-between", align="flex-end", mb="sm"),
+                html.Div(id="frame-view", className="frame-view"),
+                dmc.Text(id="frame-message", c="red", size="sm", mt=4)],
+                id="frame-area", style=HIDDEN),
             dmc.Group(dmc.Button("Build the canvas", id="build", size="md", disabled=True)),
             html.Div(id="build-result")],
             gap="lg"))
@@ -143,7 +209,9 @@ def layout():
                        dcc.Store(id="source"),  # {"session", "name", "width", "height"}
                        dcc.Store(id="crop"),  # [left, top, right, bottom] as fractions, or None
                        dcc.Store(id="settings"),  # The settings the current previews were made with
-                       dcc.Store(id="selected-detail")],
+                       dcc.Store(id="selected-detail"),
+                       dcc.Store(id="frame-size"),  # {"page": [width, height], "picture": [width, height]} in inches
+                       dcc.Store(id="crowded")],  # {detail: {print size or paper: share of crowded labels}}
                       size="lg", py=40),
         theme=THEME, forceColorScheme="light")
 
@@ -152,7 +220,8 @@ def detail_card(preview):
     """A card comparing a detail level, picked by clicking anywhere on it"""
     return html.Div(
         dmc.Card([
-            dmc.CardSection(html.Img(src=preview["image"], className="preview-image")),
+            dmc.CardSection(html.Img(id=f"preview-image-{preview['detail']}", src=preview["image"],
+                                     className="preview-image")),
             dmc.Group([dmc.Text(preview["detail"].capitalize(), fw=700, size="lg"),
                        dmc.Badge(f"{preview['colors']} colors", variant="light")], justify="space-between", mt="md"),
             dmc.Text(preview["description"], c="dimmed", size="sm"),
@@ -222,7 +291,8 @@ def next_crop_box(relayout, current, width, height):
 
 def create_app():
     """The Dash application"""
-    app = Dash(__name__, title="Paint by numbers")
+    app = Dash(__name__, title="Paint by numbers", assets_ignore=THREE_FILES)
+    app.index_string = app.index_string.replace("{%metas%}", "{%metas%}" + IMPORT_MAP)
     app.layout = layout()
 
     @app.callback(
@@ -260,10 +330,13 @@ def create_app():
         Output("crop-graph", "figure", allow_duplicate=True),
         Input("crop-graph", "relayoutData"),
         Input("crop-reset", "n_clicks"),
+        Input("crop-fill", "n_clicks"),
         State("crop-graph", "figure"),
         State("source", "data"),
+        State("crop", "data"),
+        State("print-size", "value"),
         prevent_initial_call=True)
-    def update_crop(relayout, _reset, figure, source):
+    def update_crop(relayout, _reset, _fill, figure, source, current_crop, print_size):
         if not source:
             return no_update, no_update
         shapes = (figure or {}).get("layout", {}).get("shapes") or []
@@ -271,6 +344,8 @@ def create_app():
         box = None
         if ctx.triggered_id == "crop-graph":
             box = next_crop_box(relayout, shapes[0] if shapes else None, width, height)
+        elif ctx.triggered_id == "crop-fill":
+            box = False if print_size == FIT_PAPER else fill_crop_box(source, current_crop, print_size)
         if box is False:
             return no_update, no_update
         # Patch only the shapes, rather than sending the whole picture back
@@ -295,6 +370,18 @@ def create_app():
     app.callback(Output("print-estimate", "children"), Input("source", "data"), Input("crop", "data"),
                  Input("print-size", "value"), Input("paper", "value"))(describe_print)
 
+    app.callback(Output("frame-size", "data"), Input("source", "data"), Input("crop", "data"),
+                 Input("print-size", "value"), Input("paper", "value"))(frame_size)
+    app.clientside_callback(ClientsideFunction("frame3d", "update"), Output("frame-area", "style"),
+                            Input("selected-detail", "data"), Input("frame", "value"), Input("frame-size", "data"))
+
+    @app.callback(Output("crop-fill", "disabled"), Input("source", "data"), Input("print-size", "value"))
+    def enable_crop_fill(source, print_size):
+        return not source or print_size == FIT_PAPER
+
+    app.callback(Output("print-warning", "children"), Input("crowded", "data"), Input("selected-detail", "data"),
+                 Input("print-size", "value"), Input("paper", "value"))(describe_crowding)
+
     @app.callback(Output("generate", "disabled"), Input("source", "data"))
     def enable_generate(source):
         return not source
@@ -303,6 +390,7 @@ def create_app():
         Output("previews", "children"),
         Output("settings", "data"),
         Output("selected-detail", "data"),
+        Output("crowded", "data"),
         Input("generate", "n_clicks"),
         Input("source", "data"),
         Input("crop", "data"),
@@ -311,13 +399,14 @@ def create_app():
         prevent_initial_call=True)
     def generate_previews(_clicks, source, crop, nb_color):
         if not source:
-            return no_update, no_update, no_update
+            return no_update, no_update, no_update, no_update
         try:
             previews = service.render_previews(source["session"], nb_color, crop)
         except ValueError as exc:
-            return error(str(exc)), None, None
+            return error(str(exc)), None, None, None
         cards = dmc.SimpleGrid([detail_card(preview) for preview in previews], cols={"base": 1, "sm": 3}, spacing="lg")
-        return cards, {"nb_color": nb_color, "crop": crop}, None
+        crowded = {preview["detail"]: preview["crowded"] for preview in previews}
+        return cards, {"nb_color": nb_color, "crop": crop}, None, crowded
 
     @app.callback(
         Output("selected-detail", "data", allow_duplicate=True),

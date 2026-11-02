@@ -484,3 +484,55 @@ def test_reload_starts_over(page, picture_path):
     expect(page.get_by_text("Drop your picture here")).to_be_visible()
     expect(cards(page)).to_have_count(0)
     expect(page.locator("#generate")).to_be_disabled()
+
+
+def test_crop_to_fill_the_page(page, picture_path, server_calls):
+    estimate = page.locator("#print-estimate")
+    expect(page.locator("#crop-fill")).to_be_disabled()
+    upload(page, picture_path)
+    expect(cards(page)).to_have_count(3)
+    expect(estimate).to_contain_text("83% of the 16 x 20 in page")
+    page.locator("#crop-fill").click()
+    expect(estimate).to_contain_text("20.0 x 16.0 in (51 x 41 cm), filling the page")
+    expect(page.locator("#crop-status")).to_contain_text("83% of the width x 100% of the height")
+    expect(page.locator("#crop-graph .shapelayer path").first).to_be_attached()
+    # The previews follow the crop
+    wait_until(lambda: server_calls["previews"][0][2] is not None)
+    expect(page.locator("#generate")).not_to_have_attribute("data-loading", "true")
+    expect(cards(page)).to_have_count(3)
+    cards(page).first.click()
+    build(page)
+
+    choose_print_size(page, "Fit the paper")
+    expect(page.locator("#crop-fill")).to_be_disabled()
+
+
+def test_warning_for_labels_too_large_for_the_print(page, tmp_path):
+    rng = np.random.default_rng(0)
+    blocks = rng.integers(0, 256, (100, 150, 3), dtype=np.uint8)
+    picture = tmp_path / "busy.png"
+    cv2.imwrite(str(picture), cv2.resize(blocks, (600, 400), interpolation=cv2.INTER_NEAREST))
+    upload_and_select(page, picture, card=2)
+    warning = page.locator("#print-warning")
+    choose_print_size(page, "8 x 10 in")
+    expect(warning).to_contain_text("will touch the borders")
+    choose_print_size(page, "24 x 36 in")
+    expect(warning).to_be_empty()
+
+
+def test_framed_preview_in_3d(page, picture_path):
+    area, view = page.locator("#frame-area"), page.locator("#frame-view")
+    expect(area).to_be_hidden()
+    upload_and_select(page, picture_path)
+    expect(area).to_be_visible()
+    expect(view).to_have_attribute("data-rendered", "old-gold")
+    assert page.evaluate("Boolean(document.querySelector('#frame-view canvas').getContext('webgl2'))")
+    gold = view.screenshot()
+
+    page.locator("#frame").click()
+    page.get_by_role("option", name="Walnut").click()
+    expect(view).to_have_attribute("data-rendered", "walnut")
+    assert view.screenshot() != gold
+    # A new crop makes new previews, so the choice of a level starts over and the viewer goes away with it
+    page.locator("#crop-fill").click()
+    expect(area).to_be_hidden()

@@ -7,8 +7,9 @@ import cv2
 import matplotlib.pyplot as plt
 import numpy as np
 
-from .colors import quantification, sort_palette
-from .export import PAPER_SIZES, PRINT_SIZES, colormap_picture, save_pdf
+from .colors import merge_rare_colors, quantification, sort_palette
+from .faces import detect_faces
+from .export import PAPER_SIZES, PRINT_SIZES, colormap_picture, fill_crop, save_pdf
 from .preprocessing import denoise, resize
 from .regions import find_regions, merge_small_regions, smooth_labels
 
@@ -28,7 +29,7 @@ class Canvas:
     denoise_size : int, optional, default 1500
         size in pxl of the largest dimension used for denoising
     detail : str, optional, default "medium"
-        balance between easy to paint and faithful to the picture, one of detail_levels. It sets the 3 ratios below,
+        balance between easy to paint and faithful to the picture, one of detail_levels. It sets the 4 values below,
         unless they are given
     min_region_ratio : float, optional
         regions smaller than this fraction of the picture area are merged into their neighbours
@@ -36,9 +37,17 @@ class Canvas:
         regions thinner than this fraction of the largest dimension are merged into their neighbours
     smoothing_ratio : float, optional
         strength of the borders smoothing, as a fraction of the largest dimension (0 to disable)
+    min_color_share : float, optional
+        colors covering less than this fraction of the picture are replaced by their closest color (0 to disable)
     min_color_distance : float, optional, default 6
         colors closer than this CIELAB distance (delta E) are merged, so the canvas may use less than nb_color
-    nb_samples : int, optional, default 1000
+    subject_weight : float, optional, default 10
+        how much more the center of the picture counts when choosing the colors, so that the subject gets more shades
+        and fewer large flat shapes (1 to disable)
+    face_weight : float, optional, default 30
+        the same for the faces found in the picture, which replace the center. It can be higher, as they surely are a
+        subject and cover less of the picture (1 to disable the search of faces)
+    nb_samples : int, optional, default 10000
         number of pixels sampled to fit the K-mean
     label_spacing_ratio : float, optional, default 1/6
         the label is repeated in large regions, this far apart as a fraction of the largest dimension (0 to disable)
@@ -51,14 +60,17 @@ class Canvas:
     paper_sizes = PAPER_SIZES
     print_sizes = PRINT_SIZES
     detail_levels = {
-        "easy": {"min_region_ratio": 4e-4, "min_width_ratio": 1 / 120, "smoothing_ratio": 1 / 600},
-        "medium": {"min_region_ratio": 1e-4, "min_width_ratio": 1 / 250, "smoothing_ratio": 1 / 1000},
-        "faithful": {"min_region_ratio": 5e-5, "min_width_ratio": 1 / 400, "smoothing_ratio": 1 / 1000},
+        "easy": {"min_region_ratio": 4e-4, "min_width_ratio": 1 / 120, "smoothing_ratio": 1 / 600,
+                 "min_color_share": 0.01},
+        "medium": {"min_region_ratio": 1e-4, "min_width_ratio": 1 / 250, "smoothing_ratio": 1 / 1000,
+                   "min_color_share": 0.002},
+        "faithful": {"min_region_ratio": 5e-5, "min_width_ratio": 1 / 400, "smoothing_ratio": 1 / 1000,
+                     "min_color_share": 0},
     }
 
     def __init__(self, path_pic, nb_color, pixel_size=4000, denoise_size=1500, detail="medium", min_region_ratio=None,
-                 min_width_ratio=None, smoothing_ratio=None, min_color_distance=6, nb_samples=1000,
-                 label_spacing_ratio=1 / 6):
+                 min_width_ratio=None, smoothing_ratio=None, min_color_share=None, min_color_distance=6,
+                 nb_samples=10000, label_spacing_ratio=1 / 6, subject_weight=10, face_weight=30):
         if not 1 <= nb_color <= 256:
             raise ValueError("nb_color must be between 1 and 256")
         if detail not in self.detail_levels:
@@ -76,14 +88,25 @@ class Canvas:
         self.min_region_ratio = preset["min_region_ratio"] if min_region_ratio is None else min_region_ratio
         self.min_width_ratio = preset["min_width_ratio"] if min_width_ratio is None else min_width_ratio
         self.smoothing_ratio = preset["smoothing_ratio"] if smoothing_ratio is None else smoothing_ratio
+        self.min_color_share = preset["min_color_share"] if min_color_share is None else min_color_share
         self.min_color_distance = min_color_distance
         self.nb_samples = nb_samples
+        self.subject_weight = subject_weight
+        self.face_weight = face_weight
+        self.faces = []
         self.label_spacing_ratio = label_spacing_ratio
         self.quantified_image = None
         self.canvas = None
         self.borders = None
         self.regions = []
         self.colormap = []
+        self.coverage = []
+
+    def crop_to_print(self, print_size):
+        """Crop the source around its center to the shape of a standard canvas size, to call before generate"""
+        height, width = self.src.shape[:2]
+        left, top, right, bottom = fill_crop(width, height, print_size)
+        self.src = self.src[round(top * height):round(bottom * height), round(left * width):round(right * width)]
 
     def generate(self):
         """Main function, computes the expected result, the canvas and the colormap"""
@@ -91,12 +114,22 @@ class Canvas:
         denoise_width = min(self.denoise_size, self.tar_width, max(self.src.shape[:2]))
         denoised = denoise(resize(self.src, denoise_width))
         clean_img = resize(denoised, self.tar_width)
-        labels, colors = quantification(clean_img, self.nb_color, self.nb_samples, self.min_color_distance)
+        self.faces = detect_faces(denoised) if self.face_weight > 1 else []
+        labels, colors = quantification(clean_img, self.nb_color, self.nb_samples, self.min_color_distance,
+                                        self.face_weight if self.faces else self.subject_weight, self.faces)
         labels = smooth_labels(labels, len(colors), self.smoothing_ratio)
-        labels, borders, dist, (ids, region_colors, stats) = merge_small_regions(labels, colors, self.min_region_ratio,
-                                                                                 self.min_width_ratio)
+        # Merging the regions changes the coverage of the colors, and replacing a color changes the regions
+        while True:
+            labels, borders, dist, (ids, region_colors, stats) = merge_small_regions(labels, colors,
+                                                                                     self.min_region_ratio,
+                                                                                     self.min_width_ratio)
+            lut = merge_rare_colors(labels, colors, self.min_color_share)
+            if lut is None:
+                break
+            labels = lut[labels]
         labels, colors, region_colors = sort_palette(labels, colors, region_colors)
         self.colormap = colors.tolist()
+        self.coverage = (np.bincount(labels.ravel(), minlength=len(colors)) / labels.size).tolist()
         self.quantified_image = colors[labels]
         self.borders = borders
         largest = max(labels.shape)
