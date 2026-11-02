@@ -11,7 +11,9 @@ import numpy as np
 import pytest
 
 from paint_by_numbers import Canvas
-from paint_by_numbers.export import MAX_LABEL_SIZE, MIN_LABEL_SIZE, colormap_picture, label_size, printed_size
+from paint_by_numbers.export import (MAX_LABEL_SIZE, MIN_LABEL_SIZE, PAPER_SIZES, colormap_picture,
+                                     crowded_label_share, fill_crop, label_size, paint_volumes, palette_page,
+                                     printed_size)
 
 ROOT = Path(__file__).parent.parent
 PNGS = {"sample-result.png", "sample-canvas.png", "sample-colormap.png"}
@@ -126,3 +128,65 @@ def test_cli_rejects_an_invalid_detail(picture_path):
     result = run_cli(picture_path, 5, "--detail", "hard")
     assert result.returncode != 0
     assert "--detail" in result.stderr
+
+
+@pytest.mark.parametrize("width, height, expected", [(600, 400, (1 / 12, 0, 11 / 12, 1)), (400, 600, (0, 1 / 12, 1, 11 / 12)),
+                                                     (600, 300, (0.1875, 0, 0.8125, 1)),
+                                                     (500, 400, (0, 0, 1, 1))])
+def test_fill_crop_gives_the_shape_of_the_page_in_its_orientation(width, height, expected):
+    assert fill_crop(width, height, "16x20") == pytest.approx(expected)
+
+
+def test_crop_to_print_makes_the_picture_fill_the_page(picture_path):
+    canvas = Canvas(picture_path, 5, pixel_size=600)
+    canvas.crop_to_print("16x20")
+    canvas.generate()
+    width, height = printed_size(canvas.borders.shape, "16x20")
+    assert (width, height) == pytest.approx((20, 16), abs=0.05)
+
+
+def test_cli_crop_to_fill(picture_path, tmp_path):
+    result = run_cli(picture_path, 5, "--pixel-size", 600, "--print-size", "16x20", "--crop-to-fill", "--output-dir",
+                     tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert cv2.imread(str(tmp_path / "sample-canvas.png")).shape[:2] == (480, 600)
+
+
+def test_cli_crop_to_fill_needs_a_print_size(picture_path):
+    result = run_cli(picture_path, 5, "--crop-to-fill")
+    assert result.returncode != 0
+    assert "--print-size" in result.stderr
+
+
+def test_coverage_describes_each_color(generated):
+    assert len(generated.coverage) == len(generated.colormap)
+    assert sum(generated.coverage) == pytest.approx(1)
+    assert min(generated.coverage) > 0
+
+
+def test_paint_volumes_follow_the_area_and_the_share():
+    # 10 x 10 in is 645 cm2, so about 13 ml at 50 cm2 per ml
+    assert paint_volumes([0.5, 0.5], (10, 10)) == pytest.approx([6.4516, 6.4516])
+    assert paint_volumes([1], (20, 20))[0] == pytest.approx(4 * paint_volumes([1], (10, 10))[0])
+
+
+def texts_of(figure):
+    return [text.get_text() for text in figure.axes[0].texts]
+
+
+def test_palette_page_shows_the_paint_for_the_printed_size(generated):
+    small = texts_of(palette_page(generated, PAPER_SIZES["letter"], "A title", "", "8x10"))
+    large = texts_of(palette_page(generated, PAPER_SIZES["letter"], "A title", "", "24x36"))
+    share = f"{generated.coverage[0]:.1%}"
+    assert any(text.startswith(f"{share}, ") and text.endswith(" ml") for text in small)
+    assert sum(text.endswith(" ml") for text in small) == len(generated.colormap)
+    total = [text for text in small if text.startswith("Estimated paint")]
+    assert len(total) == 1
+    assert total != [text for text in large if text.startswith("Estimated paint")]
+
+
+def test_crowded_label_share_depends_on_the_printed_size():
+    regions = [{"label": 12, "spots": [{"x": 0, "y": 0, "radius": 8.0}]}]
+    assert crowded_label_share(regions, (2000, 3000), print_size="8x10") == 1
+    assert crowded_label_share(regions, (2000, 3000), print_size="24x36") == 0
+    assert crowded_label_share([], (2000, 3000)) == 0

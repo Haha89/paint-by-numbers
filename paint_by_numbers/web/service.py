@@ -25,7 +25,7 @@ import cv2
 import numpy as np
 
 from ..canvas import Canvas
-from ..export import colormap_picture
+from ..export import colormap_picture, crowded_label_share
 from ..preprocessing import resize
 
 SESSION_ROOT = Path(tempfile.gettempdir()) / "paint-by-numbers-web"
@@ -203,6 +203,13 @@ def working_picture(session_id, crop):
     return target
 
 
+def crowded_labels(canvas):
+    """The share of labels touching their borders, for each standard size and each paper the canvas can fit"""
+    shape = canvas.borders.shape
+    return {**{size: crowded_label_share(canvas.regions, shape, print_size=size) for size in Canvas.print_sizes},
+            **{paper: crowded_label_share(canvas.regions, shape, paper=paper) for paper in Canvas.paper_sizes}}
+
+
 def render_previews(session_id, nb_color, crop=None):
     """Generate the picture once per detail level, at a low resolution, and return what the detail cards show"""
     path = working_picture(session_id, crop)
@@ -212,7 +219,7 @@ def render_previews(session_id, nb_color, crop=None):
         canvas.generate()
         previews.append({"detail": detail, "description": DETAIL_DESCRIPTIONS[detail],
                          "image": data_uri(canvas.quantified_image), "regions": len(canvas.regions),
-                         "colors": len(canvas.colormap)})
+                         "colors": len(canvas.colormap), "crowded": crowded_labels(canvas)})
     return previews
 
 

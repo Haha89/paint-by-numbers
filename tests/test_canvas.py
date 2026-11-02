@@ -1,10 +1,15 @@
 # -*- coding: utf-8 -*-
 
+from pathlib import Path
+
 import cv2
 import numpy as np
 import pytest
 
-from paint_by_numbers import Canvas
+from paint_by_numbers import Canvas, faces as faces_module
+from paint_by_numbers.faces import detect_faces
+
+ROOT = Path(__file__).parent.parent
 
 
 def nb_regions(picture_path, detail):
@@ -109,3 +114,38 @@ def test_invalid_detail_is_rejected(picture_path):
 def test_missing_picture_is_rejected(tmp_path):
     with pytest.raises(FileNotFoundError):
         Canvas(tmp_path / "missing.png", 5)
+
+
+def test_min_color_share_comes_from_the_detail_level_and_can_be_overridden(picture_path):
+    assert Canvas(picture_path, 5, detail="easy").min_color_share > Canvas(picture_path, 5, detail="faithful").min_color_share
+    assert Canvas(picture_path, 5, detail="easy", min_color_share=0).min_color_share == 0
+
+
+def test_rarely_used_colors_are_removed(picture_path):
+    kept = Canvas(picture_path, 5, pixel_size=600, min_color_share=0)
+    kept.generate()
+    assert min(kept.coverage) < 0.2  # Otherwise this test proves nothing
+    merged = Canvas(picture_path, 5, pixel_size=600, min_color_share=0.2)
+    merged.generate()
+    assert len(merged.colormap) < len(kept.colormap)
+    assert min(merged.coverage) >= 0.2
+
+
+def test_faces_are_found_on_a_face_and_not_on_shapes(picture_path, generated):
+    faces = detect_faces(cv2.cvtColor(cv2.imread(str(ROOT / "inputs" / "joconde.jpg")), cv2.COLOR_BGR2RGB))
+    assert len(faces) == 1
+    left, top, width, height = faces[0]
+    # The face of the Joconde, in the upper middle of the picture
+    assert 0.3 < left + width / 2 < 0.6 and 0.15 < top + height / 2 < 0.4
+    assert generated.faces == []
+
+
+def test_faces_can_be_disabled():
+    canvas = Canvas(ROOT / "inputs" / "joconde.jpg", 5, pixel_size=400, face_weight=1)
+    canvas.generate()
+    assert canvas.faces == []
+
+
+def test_no_face_without_the_model(monkeypatch):
+    monkeypatch.setattr(faces_module, "MODEL_PATH", Path("missing.onnx"))
+    assert faces_module.detect_faces(np.zeros((100, 100, 3), dtype=np.uint8)) == []

@@ -21,6 +21,9 @@ PRINT_SIZES = {"8x10": (8, 10), "9x12": (9, 12), "11x14": (11, 14), "12x16": (12
 PAGE_MARGIN, PAGE_HEADER = 0.6, 0.65
 # Font sizes of the labels in points: readable once printed, even when the number overflows a tiny region
 MIN_LABEL_SIZE, MAX_LABEL_SIZE = 5, 7
+# Area painted by a milliliter of acrylic paint in one covering coat, a rough and rather generous figure
+CM2_PER_ML = 50
+CM2_PER_SQUARE_INCH = 2.54 ** 2
 
 
 def label_size(radius, scale):
@@ -49,8 +52,41 @@ def page_layout(shape, paper, print_size=None):
 
 def printed_size(shape, print_size=None, paper="a4"):
     """The (width, height) in inches of a picture once printed"""
-    _, scale, _ = page_layout(shape, PAPER_SIZES[paper], print_size)
+    return printed_on_page(shape, PAPER_SIZES[paper], print_size)
+
+
+def printed_on_page(shape, paper, print_size=None):
+    """The (width, height) in inches of a picture on a page, for a paper given by its dimensions"""
+    _, scale, _ = page_layout(shape, paper, print_size)
     return shape[1] * scale, shape[0] * scale
+
+
+def fill_crop(width, height, print_size):
+    """The centered crop (left, top, right, bottom as fractions) giving a picture the shape of a standard canvas size"""
+    page_width, page_height = oriented(PRINT_SIZES[print_size], width, height)
+    kept_width = min(1.0, height * page_width / page_height / width)
+    kept_height = min(1.0, width * page_height / page_width / height)
+    return (1 - kept_width) / 2, (1 - kept_height) / 2, (1 + kept_width) / 2, (1 + kept_height) / 2
+
+
+def paint_volumes(coverage, printed):
+    """The estimated milliliters of each color, from its share of the canvas and the printed (width, height) in inches"""
+    return [share * printed[0] * printed[1] * CM2_PER_SQUARE_INCH / CM2_PER_ML for share in coverage]
+
+
+def crowded_label_share(regions, shape, print_size=None, paper="a4"):
+    """The share of the regions whose label touches their borders once printed: it doesn't fit in the region"""
+    if not regions:
+        return 0.0
+    _, scale, _ = page_layout(shape, PAPER_SIZES[paper], print_size)
+    crowded = 0
+    for region in regions:
+        radius = region["spots"][0]["radius"]
+        size = label_size(radius, scale)
+        # Half of the diagonal of the number, in points, for the proportions of a usual font
+        half_diagonal = np.hypot(len(str(region["label"])) * 0.55 * size, 0.72 * size) / 2
+        crowded += radius * scale * 72 < half_diagonal
+    return crowded / len(regions)
 
 
 def inch_figure(width, height, dpi=100):
@@ -63,8 +99,9 @@ def inch_figure(width, height, dpi=100):
     return fig, axes
 
 
-def draw_palette(axes, colormap, x_0, y_0, nb_cols, col_width, row_height, swatch_width=0.7):
-    """Draw the numbered swatches with their hex and RGB codes, returns the height used"""
+def draw_palette(axes, colormap, x_0, y_0, nb_cols, col_width, row_height, swatch_width=0.7,
+                 quantities=None):
+    """Draw the numbered swatches with their hex and RGB codes and optional quantities, returns the height used"""
     nb_rows = -(-len(colormap) // nb_cols)
     for ind, col in enumerate(colormap):
         column, row = divmod(ind, nb_rows)
@@ -79,6 +116,9 @@ def draw_palette(axes, colormap, x_0, y_0, nb_cols, col_width, row_height, swatc
                   va="center", fontsize=10, family="monospace", color="#222222")
         axes.text(x + swatch_width + 0.15, y + row_height * 0.72, "RGB {} {} {}".format(*col), va="center",
                   fontsize=7, color="#888888")
+        if quantities:
+            axes.text(x + col_width - 0.2, y + row_height / 2, quantities[ind], ha="right", va="center", fontsize=8,
+                      color="#444444")
     return nb_rows * row_height
 
 
@@ -94,7 +134,7 @@ def colormap_picture(colormap, dpi=200):
     return np.asarray(canvas.buffer_rgba())[..., :3].copy()
 
 
-def palette_page(canvas, paper, title, subtitle):
+def palette_page(canvas, paper, title, subtitle, print_size=None):
     """PDF page with the palette, the source picture and the expected result"""
     width, height = paper
     margin = 0.6
@@ -104,7 +144,13 @@ def palette_page(canvas, paper, title, subtitle):
               color="#777777")
     nb_cols = 2 if len(canvas.colormap) > 8 else 1
     y = margin + 0.9
-    y += draw_palette(axes, canvas.colormap, margin, y, nb_cols, (width - 2 * margin) / 2, 0.46) + 0.5
+    volumes = paint_volumes(canvas.coverage, printed_on_page(canvas.borders.shape, paper, print_size))
+    quantities = [f"{share:.1%}, {'< 1' if volume < 1 else round(volume)} ml"
+                  for share, volume in zip(canvas.coverage, volumes)]
+    y += draw_palette(axes, canvas.colormap, margin, y, nb_cols, (width - 2 * margin) / 2, 0.46, quantities=quantities)
+    axes.text(margin, y + 0.05, f"Estimated paint for one covering coat: about {max(1, round(sum(volumes)))} ml in "
+              "total. Prepare some extra.", fontsize=8, va="top", color="#777777")
+    y += 0.5
 
     # Source picture and expected result side by side, in the remaining space
     gap, caption = 0.3, 0.25
@@ -152,5 +198,5 @@ def save_pdf(canvas, path, title=None, subtitle="", paper="a4", print_size=None)
     title = title or canvas.namefile
     paper = PAPER_SIZES[paper]
     with plt.rc_context({"pdf.fonttype": 42}), PdfPages(path, metadata={"Title": title}) as pdf:
-        pdf.savefig(palette_page(canvas, paper, title, subtitle))
+        pdf.savefig(palette_page(canvas, paper, title, subtitle, print_size))
         pdf.savefig(canvas_page(canvas, paper, title, subtitle, print_size))

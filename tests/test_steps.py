@@ -2,7 +2,8 @@
 
 import numpy as np
 
-from paint_by_numbers.colors import merge_close_colors, rgb_to_lab, sort_palette
+from paint_by_numbers.colors import (merge_close_colors, merge_rare_colors, quantification, rgb_to_lab, sort_palette,
+                                     subject_weights)
 from paint_by_numbers.preprocessing import resize, target_dim
 from paint_by_numbers.regions import (distance_to_borders, find_borders, find_regions, label_regions,
                                       merge_small_regions)
@@ -115,3 +116,63 @@ def test_find_regions_repeats_the_label_along_a_long_region():
 def test_find_regions_does_not_repeat_where_a_label_does_not_fit():
     region, = regions_of(np.zeros((5, 401), dtype=np.uint8), spacing=100, min_radius=5)
     assert len(region["spots"]) == 1
+
+
+RARE_COLORS = np.array([[0, 0, 0], [240, 240, 240], [255, 255, 255]], dtype=np.uint8)
+
+
+def rare_labels(rare_pixels):
+    labels = np.zeros((100, 100), dtype=np.uint8)
+    labels[:, 50:] = 1
+    labels[:rare_pixels, 0] = 2
+    return labels
+
+
+def test_merge_rare_colors_gives_the_closest_kept_color():
+    lut = merge_rare_colors(rare_labels(10), RARE_COLORS, 0.01)
+    assert lut.tolist() == [0, 1, 1]
+
+
+def test_merge_rare_colors_keeps_a_color_above_the_threshold():
+    assert merge_rare_colors(rare_labels(100), RARE_COLORS, 0.01) is None
+
+
+def test_merge_rare_colors_is_disabled_at_zero():
+    assert merge_rare_colors(rare_labels(1), RARE_COLORS, 0) is None
+
+
+def test_merge_rare_colors_always_keeps_the_most_used_color():
+    labels = np.zeros((10, 10), dtype=np.uint8)
+    labels[0, 0] = 1
+    assert merge_rare_colors(labels, RARE_COLORS, 1.0).tolist() == [0, 0, 2]
+
+
+def test_subject_weights_fade_from_the_center_to_the_edges():
+    # On a 100 x 100 picture: the usual subject at (50, 40), then a corner
+    center, corner = subject_weights(np.array([40 * 100 + 50, 0]), 100, 100, 10)
+    assert center == 10
+    assert 1 < corner < 1.5
+    assert (subject_weights(np.array([0, 5000]), 100, 100, 1) == 1).all()
+
+
+def test_subject_weights_follow_the_faces_rather_than_the_center():
+    face, center = subject_weights(np.array([15 * 100 + 15, 40 * 100 + 50]), 100, 100, 10, [(0.1, 0.1, 0.1, 0.1)])
+    assert face == 10
+    assert center < 1.01
+    other_face = subject_weights(np.array([85 * 100 + 85]), 100, 100, 10, [(0.1, 0.1, 0.1, 0.1), (0.8, 0.8, 0.1, 0.1)])
+    assert other_face == 10
+
+
+def test_subject_weight_gives_the_center_its_own_colors():
+    # A green gradient filling the picture, and too few colors for it and for the two tones of a patch at the center
+    picture = np.zeros((200, 200, 3), dtype=np.uint8)
+    picture[..., 1] = np.linspace(40, 255, 200, dtype=np.uint8)[:, None]
+    picture[60:100, 80:100] = (230, 130, 40)
+    picture[60:100, 100:120] = (180, 70, 40)
+
+    def center_colors(subject_weight):
+        labels, _ = quantification(picture, 5, 10000, 0, subject_weight)
+        return len(np.unique(labels[60:100, 80:120]))
+
+    assert center_colors(1) == 1
+    assert center_colors(10) == 2
