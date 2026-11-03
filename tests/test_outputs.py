@@ -9,6 +9,7 @@ import cv2
 import matplotlib.pyplot as plt
 import numpy as np
 import pytest
+from PIL import Image
 
 from paint_by_numbers import Canvas
 from paint_by_numbers.export import (MAX_LABEL_SIZE, MIN_LABEL_SIZE, PAPER_SIZES, colormap_picture,
@@ -32,6 +33,19 @@ def test_save_writes_the_pictures_and_the_pdf(generated, tmp_path):
     generated.save(tmp_path / "new" / "folder")
     assert names(tmp_path / "new" / "folder") == PNGS | {"sample.pdf"}
     assert cv2.imread(str(tmp_path / "new" / "folder" / "sample-canvas.png")).shape[:2] == (400, 600)
+
+
+@pytest.mark.parametrize("print_size, paper", [("24x36", "a4"), ("8x10", "a4"), (None, "a3")])
+def test_saved_pictures_open_at_their_printed_size(generated, tmp_path, print_size, paper):
+    generated.save(tmp_path, pdf=False, paper=paper, print_size=print_size)
+    expected = printed_size(generated.canvas.shape, print_size, paper)
+    for suffix in ("canvas", "result"):
+        with Image.open(tmp_path / f"sample-{suffix}.png") as picture:
+            width_dpi, height_dpi = picture.info["dpi"]
+            assert picture.size[0] / width_dpi == pytest.approx(expected[0], rel=1e-3)
+            assert picture.size[1] / height_dpi == pytest.approx(expected[1], rel=1e-3)
+    with Image.open(tmp_path / "sample-colormap.png") as picture:
+        assert picture.info["dpi"] == pytest.approx((200, 200), rel=1e-3)
 
 
 def test_save_without_pdf(generated, tmp_path):
@@ -190,3 +204,13 @@ def test_crowded_label_share_depends_on_the_printed_size():
     assert crowded_label_share(regions, (2000, 3000), print_size="8x10") == 1
     assert crowded_label_share(regions, (2000, 3000), print_size="24x36") == 0
     assert crowded_label_share([], (2000, 3000)) == 0
+
+
+def test_crowded_label_share_inside_a_mask():
+    regions = [{"label": 12, "spots": [{"x": 10, "y": 10, "radius": 8.0}]},
+               {"label": 3, "spots": [{"x": 2900, "y": 1900, "radius": 500.0}]}]
+    mask = np.zeros((2000, 3000), dtype=bool)
+    assert crowded_label_share(regions, mask.shape, print_size="8x10") == 0.5
+    mask[:100, :100] = True
+    assert crowded_label_share(regions, mask.shape, print_size="8x10", mask=mask) == 1
+    assert crowded_label_share(regions, mask.shape, print_size="8x10", mask=~mask) == 0

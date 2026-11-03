@@ -16,10 +16,12 @@ dependencies = [
 dev = [
     "playwright>=1.64.1",
     "pytest>=9.2.0",
+    "pytest-xdist>=3.8.0",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
-# Dash ships a pytest plugin for browser testing, which is not used here
-addopts = "-p no:dash"
+# Dash ships a pytest plugin for browser testing, which is not used here. The tests run in parallel, on up to 8
+# workers: more slows them down, each worker running its own Chrome. Add -n 0 to run them in a single process
+addopts = "-p no:dash -n auto --maxprocesses 8"

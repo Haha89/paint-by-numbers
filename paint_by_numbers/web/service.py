@@ -26,6 +26,7 @@ import numpy as np
 
 from ..canvas import Canvas
 from ..export import colormap_picture, crowded_label_share
+from ..faces import face_mask
 from ..preprocessing import resize
 
 SESSION_ROOT = Path(tempfile.gettempdir()) / "paint-by-numbers-web"
@@ -42,6 +43,10 @@ RESULT_DISPLAY_SIZE = 1400
 MIN_CROP_FRACTION = 0.04
 DETAIL_DESCRIPTIONS = {"easy": "Large regions, quick to paint", "medium": "A balance of detail and effort",
                        "detailed": "Small regions, closest to the picture"}
+# Largest dimension of the picture of a project saved in the browser, whose storage holds about 5 MB. The canvas is
+# denoised at 1500 pxl, so this keeps all the details of a crop down to 60% of the picture, in a few hundred kB
+PROJECT_PICTURE_SIZE = 2400
+PROJECT_THUMBNAIL_SIZE = 160
 BUILT_SUFFIXES = (".pdf", "-canvas.png", "-result.png", "-colormap.png")
 
 _SESSION_ID = re.compile(r"^[0-9a-f]{32}$")
@@ -171,6 +176,22 @@ def source_preview(session_id, max_size=800):
     return data_uri(picture), picture.shape[1], picture.shape[0]
 
 
+def jpeg_uri(picture, max_size, quality):
+    """A JPEG data: URI of a BGR picture, no larger than max_size"""
+    if max(picture.shape[:2]) > max_size:
+        picture = resize(picture, max_size)
+    ok, jpeg = cv2.imencode(".jpg", picture, [cv2.IMWRITE_JPEG_QUALITY, quality])
+    if not ok:
+        raise ImageError("The picture can't be saved.")
+    return "data:image/jpeg;base64," + base64.b64encode(jpeg.tobytes()).decode("ascii")
+
+
+def project_pictures(session_id):
+    """The source picture to keep in a saved project, and its thumbnail, as JPEG data: URIs"""
+    picture = cv2.imread(str(source_path(session_id)))
+    return jpeg_uri(picture, PROJECT_PICTURE_SIZE, 92), jpeg_uri(picture, PROJECT_THUMBNAIL_SIZE, 80)
+
+
 def validate_crop(crop):
     """Returns the crop (left, top, right, bottom as fractions) clamped to the picture, None if there is no crop or if
     it is too small to be deliberate"""
@@ -204,10 +225,21 @@ def working_picture(session_id, crop):
 
 
 def crowded_labels(canvas):
-    """The share of labels touching their borders, for each standard size and each paper the canvas can fit"""
+    """The share of labels touching their borders, for each standard size and each paper the canvas can fit
+
+    Returns it over the whole picture ("all") and over its faces ("faces", None without any face), as the average can
+    hide a crowded face: the smallest regions are kept there
+    """
     shape = canvas.borders.shape
-    return {**{size: crowded_label_share(canvas.regions, shape, print_size=size) for size in Canvas.print_sizes},
-            **{paper: crowded_label_share(canvas.regions, shape, paper=paper) for paper in Canvas.paper_sizes}}
+    faces = face_mask(shape, canvas.faces)
+
+    def shares(mask):
+        return {**{size: crowded_label_share(canvas.regions, shape, print_size=size, mask=mask)
+                   for size in Canvas.print_sizes},
+                **{paper: crowded_label_share(canvas.regions, shape, paper=paper, mask=mask)
+                   for paper in Canvas.paper_sizes}}
+
+    return {"all": shares(None), "faces": None if faces is None else shares(faces)}
 
 
 def render_previews(session_id, nb_color, crop=None):

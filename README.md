@@ -32,7 +32,7 @@ Dependencies are managed with [uv](https://docs.astral.sh/uv/). Install them wit
 ### Web interface:
 run `uv run app.py [--host H] [--port N] [--debug]`, then open http://127.0.0.1:8051
 
-Upload a picture or paste a link to one, crop it if you want, compare the detail levels side by side, choose the printed size, crop the picture to fill it in one click, get warned when the numbers will be too crowded at this size, see your painting in 3D in a wood or gold frame, then download the PDF and the pictures in a ZIP.
+Upload a picture or paste a link to one, crop it if you want, compare the detail levels side by side, choose the printed size, crop the picture to fill it in one click, get warned when the numbers will be too crowded at this size, see your painting in 3D in a wood or gold frame, then download the PDF and the pictures in a ZIP. Save the project in the browser to come back to it later, with its picture, crop and settings.
 
 ### Execution:
 run `uv run run.py path nb_color [--plot] [--no-save] [--pixel-size N] [--detail D] [--output-dir DIR] [--no-pdf] [--title T] [--subtitle S] [--paper P] [--print-size S] [--crop-to-fill]` with:
@@ -54,7 +54,7 @@ run `uv run run.py path nb_color [--plot] [--no-save] [--pixel-size N] [--detail
 Example: `uv run run.py inputs/chirico.jpg 20 --title "Place d'Italie" --subtitle "Giorgio De Chirico, 1922"`
 
 ### Tests:
-run `uv run pytest`. The browser tests use your installed Chrome, and are skipped without it.
+run `uv run pytest`. The tests run in parallel on up to 8 processes, add `-n 0` for a single one, e.g. to debug. The browser tests use your installed Chrome, and are skipped without it.
 
 ### Result:
 
