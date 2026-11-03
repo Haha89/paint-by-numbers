@@ -9,7 +9,7 @@ import numpy as np
 
 from .colors import merge_rare_colors, quantification, sort_palette
 from .faces import detect_faces, face_mask
-from .export import PAPER_SIZES, PRINT_SIZES, colormap_picture, fill_crop, save_pdf
+from .export import COLORMAP_DPI, PAPER_SIZES, PRINT_SIZES, colormap_picture, encode_png, fill_crop, print_dpi, save_pdf
 from .preprocessing import denoise, resize
 from .regions import find_regions, merge_small_regions, smooth_labels
 
@@ -172,16 +172,18 @@ class Canvas:
         self.plot_figure(colormap_picture(self.colormap), "Colormap")
 
     def save(self, output_dir="./outputs", pdf=True, title=None, subtitle="", paper="a4", print_size=None):
-        """Save the expected result, the canvas and the colormap in output_dir, and the printable PDF"""
+        """Save the expected result, the canvas and the colormap in output_dir, and the printable PDF
+
+        The pictures hold their print resolution, so that they open at the size of the PDF canvas page
+        """
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
-        outputs = {"result": cv2.cvtColor(self.quantified_image, cv2.COLOR_RGB2BGR),
-                   "canvas": self.canvas,
-                   "colormap": cv2.cvtColor(colormap_picture(self.colormap), cv2.COLOR_RGB2BGR)}
-        for suffix, picture in outputs.items():
-            path = output_dir / f"{self.namefile}-{suffix}.png"
-            if not cv2.imwrite(str(path), picture):
-                raise OSError(f"Cannot write picture: {path}")
+        dpi = print_dpi(self.canvas.shape, print_size, paper)
+        outputs = {"result": (cv2.cvtColor(self.quantified_image, cv2.COLOR_RGB2BGR), dpi),
+                   "canvas": (self.canvas, dpi),
+                   "colormap": (cv2.cvtColor(colormap_picture(self.colormap), cv2.COLOR_RGB2BGR), COLORMAP_DPI)}
+        for suffix, (picture, resolution) in outputs.items():
+            (output_dir / f"{self.namefile}-{suffix}.png").write_bytes(encode_png(picture, resolution))
         if pdf:
             save_pdf(self, output_dir / f"{self.namefile}.pdf", title, subtitle, paper, print_size)
 

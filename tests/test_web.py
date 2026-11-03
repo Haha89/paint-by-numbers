@@ -277,25 +277,33 @@ def test_path_traversal_only_reaches_the_page(session):
     assert response.mimetype == "text/html"
 
 
-CROWDED = {"easy": {"8x10": 0.1, "a4": 0.9}, "detailed": {"8x10": 0.6}}
+CROWDED = {"easy": {"all": {"8x10": 0.1, "a4": 0.9}, "faces": None},
+           "medium": {"all": {"8x10": 0.1, "24x36": 0}, "faces": {"8x10": 0.5, "24x36": 0.1}},
+           "detailed": {"all": {"8x10": 0.6}, "faces": {"8x10": 0.8}}}
 
 
 def test_no_crowding_warning_without_a_choice_or_under_the_threshold():
     assert describe_crowding(None, None, "8x10", "a4") is None
     assert describe_crowding(CROWDED, None, "8x10", "a4") is None
     assert describe_crowding(CROWDED, "easy", "8x10", "a4") is None
+    assert describe_crowding(CROWDED, "medium", "24x36", "a4") is None
 
 
 def test_crowding_warning_gives_the_share_for_the_size_or_the_paper():
-    assert "60%" in describe_crowding(CROWDED, "detailed", "8x10", "a4").children
+    assert "60% of the numbers will" in describe_crowding(CROWDED, "detailed", "8x10", "a4").children
     assert "90%" in describe_crowding(CROWDED, "easy", FIT_PAPER, "a4").children
+
+
+def test_crowding_warning_on_the_faces_when_the_average_is_fine():
+    assert "50% of the numbers on the faces" in describe_crowding(CROWDED, "medium", "8x10", "a4").children
 
 
 def test_previews_give_the_crowded_labels_of_each_size_and_paper(session):
     crowded = service.render_previews(session, 5)[0]["crowded"]
-    assert {"8x10", "24x36", "a4", "a3", "letter"} <= set(crowded)
-    assert all(0 <= share <= 1 for share in crowded.values())
-    assert crowded["8x10"] >= crowded["24x36"]
+    assert {"8x10", "24x36", "a4", "a3", "letter"} <= set(crowded["all"])
+    assert all(0 <= share <= 1 for share in crowded["all"].values())
+    assert crowded["all"]["8x10"] >= crowded["all"]["24x36"]
+    assert crowded["faces"] is None  # The generated picture has no face
 
 
 def test_fill_crop_box_centers_the_page_in_the_picture():

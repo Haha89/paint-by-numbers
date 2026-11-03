@@ -549,3 +549,34 @@ def test_wood_frames_load_their_textures(page, picture_path):
     expect(view).to_have_attribute("data-rendered", "mahogany")
     assert {response.url.rsplit("/", 1)[1] for response in responses} == {"Wood026_color.jpg", "Wood026_normal.jpg"}
     assert all(response.ok for response in responses)
+
+
+def changed_pixels(before, after):
+    """The share of the pixels of two screenshots which clearly differ, ignoring the noise of the rendering"""
+    before, after = (cv2.imdecode(np.frombuffer(shot, np.uint8), cv2.IMREAD_COLOR).astype(int) for shot in (before, after))
+    return (np.abs(before - after).max(axis=2) > 20).mean()
+
+
+def test_wheel_scrolls_the_page_over_the_3d_preview_and_ctrl_wheel_zooms(page, picture_path):
+    upload_and_select(page, picture_path)
+    view = page.locator("#frame-view")
+    expect(view).to_have_attribute("data-rendered", "old-gold")
+    view.scroll_into_view_if_needed()
+    box = view.bounding_box()
+    page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+    before, scroll = view.screenshot(), page.evaluate("window.scrollY")
+    # The view is at the bottom of the page, which can only scroll up
+    page.mouse.wheel(0, -200)
+    page.wait_for_function(f"window.scrollY < {scroll}")
+    assert changed_pixels(before, view.screenshot()) < 0.01
+
+    view.scroll_into_view_if_needed()
+    box = view.bounding_box()
+    page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+    before, scroll = view.screenshot(), page.evaluate("window.scrollY")
+    page.keyboard.down("Control")
+    page.mouse.wheel(0, -300)
+    page.keyboard.up("Control")
+    page.wait_for_timeout(300)
+    assert page.evaluate("window.scrollY") == scroll
+    assert changed_pixels(before, view.screenshot()) > 0.1

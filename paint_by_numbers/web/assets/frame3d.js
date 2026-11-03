@@ -218,6 +218,13 @@
                 minPolarAngle: 0.85, maxPolarAngle: 2.3,
             });
             this.controls.addEventListener("change", () => this.render());
+            // The view sits in the middle of the page, which the wheel keeps scrolling: Ctrl or Cmd + wheel zooms, as
+            // on a map. Stopped while capturing, the other wheel events never reach the controls nor get cancelled
+            container.addEventListener("wheel", (event) => {
+                if (!event.ctrlKey && !event.metaKey) event.stopPropagation();
+            }, {capture: true});
+            // On a touch screen, a vertical swipe scrolls the page, a horizontal one turns around and pinching zooms
+            this.renderer.domElement.style.touchAction = "pan-y";
             this.textures = {};
             new ResizeObserver(() => this.resize()).observe(container);
         }

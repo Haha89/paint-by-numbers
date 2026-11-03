@@ -1,6 +1,9 @@
 # -*- coding: utf-8 -*-
 """Colormap picture and printable PDF of a generated canvas"""
 
+import struct
+import zlib
+
 import cv2
 import matplotlib.pyplot as plt
 import numpy as np
@@ -24,6 +27,9 @@ MIN_LABEL_SIZE, MAX_LABEL_SIZE = 5, 7
 # Area painted by a milliliter of acrylic paint in one covering coat, a rough and rather generous figure
 CM2_PER_ML = 50
 CM2_PER_SQUARE_INCH = 2.54 ** 2
+INCHES_PER_METER = 100 / 2.54
+# Resolution of the colormap picture
+COLORMAP_DPI = 200
 
 
 def label_size(radius, scale):
@@ -74,8 +80,13 @@ def paint_volumes(coverage, printed):
     return [share * printed[0] * printed[1] * CM2_PER_SQUARE_INCH / CM2_PER_ML for share in coverage]
 
 
-def crowded_label_share(regions, shape, print_size=None, paper="a4"):
-    """The share of the regions whose label touches their borders once printed: it doesn't fit in the region"""
+def crowded_label_share(regions, shape, print_size=None, paper="a4", mask=None):
+    """The share of the regions whose label touches their borders once printed: it doesn't fit in the region
+
+    With a mask of the picture, only the regions whose first label is inside it count, such as those of the faces
+    """
+    if mask is not None:
+        regions = [region for region in regions if mask[region["spots"][0]["y"], region["spots"][0]["x"]]]
     if not regions:
         return 0.0
     _, scale, _ = page_layout(shape, PAPER_SIZES[paper], print_size)
@@ -87,6 +98,29 @@ def crowded_label_share(regions, shape, print_size=None, paper="a4"):
         half_diagonal = np.hypot(len(str(region["label"])) * 0.55 * size, 0.72 * size) / 2
         crowded += radius * scale * 72 < half_diagonal
     return crowded / len(regions)
+
+
+def print_dpi(shape, print_size=None, paper="a4"):
+    """The dots per inch of a picture of this shape once printed, as in the PDF canvas page"""
+    _, scale, _ = page_layout(shape, PAPER_SIZES[paper], print_size)
+    return 1 / scale
+
+
+def encode_png(picture, dpi=None):
+    """The PNG file of a picture, with its print resolution in a pHYs chunk so that other software opens it at the
+    right size"""
+    ok, png = cv2.imencode(".png", picture)
+    if not ok:
+        raise OSError("Cannot encode the picture as PNG")
+    png = png.tobytes()
+    if not dpi:
+        return png
+    pixels_per_meter = round(dpi * INCHES_PER_METER)
+    data = b"pHYs" + struct.pack(">IIB", pixels_per_meter, pixels_per_meter, 1)
+    chunk = struct.pack(">I", 9) + data + struct.pack(">I", zlib.crc32(data))
+    # The chunk goes right after IHDR: the 8 bytes signature, then IHDR's length, type, 13 bytes of data and CRC
+    end_of_header = 8 + 4 + 4 + 13 + 4
+    return png[:end_of_header] + chunk + png[end_of_header:]
 
 
 def inch_figure(width, height, dpi=100):
@@ -122,7 +156,7 @@ def draw_palette(axes, colormap, x_0, y_0, nb_cols, col_width, row_height, swatc
     return nb_rows * row_height
 
 
-def colormap_picture(colormap, dpi=200):
+def colormap_picture(colormap, dpi=COLORMAP_DPI):
     """Returns the colormap as a picture for the user: numbered swatches with their hex and RGB codes"""
     nb_cols = 2 if len(colormap) > 8 else 1
     nb_rows = -(-len(colormap) // nb_cols)

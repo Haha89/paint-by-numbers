@@ -106,11 +106,18 @@ def describe_print(source, crop, print_size, paper):
 
 
 def describe_crowding(crowded, detail, print_size, paper):
-    """A warning when many labels of the chosen detail level will touch the borders at the chosen size"""
-    share = ((crowded or {}).get(detail) or {}).get(paper if print_size == FIT_PAPER else print_size, 0)
+    """A warning when many labels of the chosen detail level will touch the borders at the chosen size, over the whole
+    picture or only on its faces"""
+    shares = (crowded or {}).get(detail) or {}
+    size = paper if print_size == FIT_PAPER else print_size
+    share = (shares.get("all") or {}).get(size, 0)
+    face_share = (shares.get("faces") or {}).get(size, 0)
+    where = "the numbers"
+    if face_share >= CROWDED_WARNING > share:
+        where, share = "the numbers on the faces", face_share
     if share < CROWDED_WARNING:
         return None
-    return dmc.Alert(f"About {share:.0%} of the numbers will touch the borders of their region at this size. A larger "
+    return dmc.Alert(f"About {share:.0%} of {where} will touch the borders of their region at this size. A larger "
                      "size or a lower detail level would make them easier to read.", color="yellow", variant="light",
                      radius="md")
 
@@ -193,8 +200,8 @@ def layout():
             html.Div([
                 dmc.Group([
                     dmc.Stack([dmc.Text("See it framed", fw=600, size="sm"),
-                               dmc.Text("Your painting at its real size, once finished. Drag to turn around it, scroll "
-                                        "to get closer. The frame is only a preview: it is not in the files.",
+                               dmc.Text("Your painting at its real size, once finished. Drag to turn around it, Ctrl + "
+                                        "scroll or pinch to get closer. The frame is only a preview: it is not in the files.",
                                         c="dimmed", size="xs")], gap=0, style={"flex": "1 1 280px"}),
                     dmc.Select(id="frame", label="Frame", value="old-gold", data=FRAMES, allowDeselect=False, w=220)],
                     justify="space-between", align="flex-end", mb="sm"),
@@ -212,7 +219,8 @@ def layout():
                        dcc.Store(id="settings"),  # The settings the current previews were made with
                        dcc.Store(id="selected-detail"),
                        dcc.Store(id="frame-size"),  # {"page": [width, height], "picture": [width, height]} in inches
-                       dcc.Store(id="crowded")],  # {detail: {print size or paper: share of crowded labels}}
+                       # {detail: {"all" or "faces": {print size or paper: share of crowded labels}}}
+                       dcc.Store(id="crowded")],
                       size="lg", py=40),
         theme=THEME, forceColorScheme="light")
 

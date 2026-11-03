@@ -26,6 +26,7 @@ import numpy as np
 
 from ..canvas import Canvas
 from ..export import colormap_picture, crowded_label_share
+from ..faces import face_mask
 from ..preprocessing import resize
 
 SESSION_ROOT = Path(tempfile.gettempdir()) / "paint-by-numbers-web"
@@ -204,10 +205,21 @@ def working_picture(session_id, crop):
 
 
 def crowded_labels(canvas):
-    """The share of labels touching their borders, for each standard size and each paper the canvas can fit"""
+    """The share of labels touching their borders, for each standard size and each paper the canvas can fit
+
+    Returns it over the whole picture ("all") and over its faces ("faces", None without any face), as the average can
+    hide a crowded face: the smallest regions are kept there
+    """
     shape = canvas.borders.shape
-    return {**{size: crowded_label_share(canvas.regions, shape, print_size=size) for size in Canvas.print_sizes},
-            **{paper: crowded_label_share(canvas.regions, shape, paper=paper) for paper in Canvas.paper_sizes}}
+    faces = face_mask(shape, canvas.faces)
+
+    def shares(mask):
+        return {**{size: crowded_label_share(canvas.regions, shape, print_size=size, mask=mask)
+                   for size in Canvas.print_sizes},
+                **{paper: crowded_label_share(canvas.regions, shape, paper=paper, mask=mask)
+                   for paper in Canvas.paper_sizes}}
+
+    return {"all": shares(None), "faces": None if faces is None else shares(faces)}
 
 
 def render_previews(session_id, nb_color, crop=None):
