@@ -23,6 +23,7 @@
 
 ## Done
 
+- **Saved projects**: the web interface keeps projects in the localStorage of the browser: the picture (a JPEG of at most 2400 pxl, enough as the canvas is denoised at 1500 pxl), the crop and every setting, detail level and frame included. They are listed in step 1 to open or delete, and the page says when the storage, about 5 MB, is full
 - **PNG print resolution**: the canvas and the expected result hold the resolution of the PDF canvas page, so they open at their printed size in other software
 - **Crowding warning on faces**: the web interface also judges the faces alone, as the whole picture can stay under the 25% limit while a face is crowded (17% overall but 52% on the face for the Joconde with `detailed` at 16x20)
 - **Scrolling over the 3D preview**: the wheel scrolls the page and Ctrl + wheel zooms. On a touch screen, a vertical swipe scrolls, a horizontal one turns and pinching zooms (not tested on a real phone yet)

@@ -77,3 +77,12 @@ body {
     height: 320px;
   }
 }
+
+/* Step 1: the projects saved in the browser */
+.project-thumbnail {
+    border-radius: 6px;
+    flex: none;
+    height: 48px;
+    object-fit: cover;
+    width: 48px;
+}

@@ -1,14 +1,24 @@
 # -*- coding: utf-8 -*-
 """Small generated pictures, so that the tests are fast and do not depend on the examples"""
 
+import os
+
 import cv2
 import matplotlib
 import numpy as np
 import pytest
+from threadpoolctl import threadpool_limits
 
 from paint_by_numbers import Canvas
 
 matplotlib.use("Agg")
+
+# With pytest-xdist, each worker gets its share of the cores: OpenCV and the K-mean would otherwise each use all of
+# them in every worker, and the slowed down previews would miss the timeouts of the browser tests
+if "PYTEST_XDIST_WORKER_COUNT" in os.environ:
+    _THREADS = max(1, (os.cpu_count() or 1) // int(os.environ["PYTEST_XDIST_WORKER_COUNT"]))
+    cv2.setNumThreads(_THREADS)
+    threadpool_limits(_THREADS)
 
 
 @pytest.fixture(scope="session")

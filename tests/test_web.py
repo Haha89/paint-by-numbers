@@ -12,8 +12,10 @@ import numpy as np
 import pytest
 
 from paint_by_numbers.web import service
+from dash import no_update
+
 from paint_by_numbers.web.app import (FIT_PAPER, create_app, describe_crowding, describe_print, fill_crop_box, frame_size,
-                                      next_crop_box)
+                                      next_crop_box, project_settings, saved_project, saved_projects)
 
 
 @pytest.fixture(autouse=True)
@@ -326,3 +328,55 @@ def test_frame_fits_the_picture_without_white_bands():
 def test_frame_size_on_the_paper_is_the_picture_itself():
     size = frame_size({"width": 600, "height": 400}, None, FIT_PAPER, "letter")
     assert size["page"] == pytest.approx(size["picture"])
+
+
+def test_saved_project_keeps_the_picture_and_the_settings(session):
+    source = {"session": session, "name": "my picture.png", "width": 600, "height": 400}
+    project = saved_project(None, source, [0.1, 0, 0.9, 1], 20, "easy", "8x10", "a4", "", None, "walnut")
+    assert len(project["id"]) == 32 and project["name"] == "my picture"
+    assert (project["crop"], project["nb_color"], project["detail"]) == ([0.1, 0, 0.9, 1], 20, "easy")
+    assert (project["print_size"], project["paper"], project["frame"]) == ("8x10", "a4", "walnut")
+    assert project["title"] == project["subtitle"] == ""
+    picture = cv2.imdecode(np.frombuffer(service.image_bytes_from_upload(project["picture"]), np.uint8), cv2.IMREAD_COLOR)
+    assert picture.shape == (400, 600, 3)
+    thumbnail = service.image_bytes_from_upload(project["thumbnail"])
+    assert max(cv2.imdecode(np.frombuffer(thumbnail, np.uint8), cv2.IMREAD_COLOR).shape[:2]) == 160
+    # Saving again keeps the id, and the title names the project
+    again = saved_project(project["id"], source, None, 20, None, FIT_PAPER, "a4", "A title", "", "none")
+    assert (again["id"], again["name"]) == (project["id"], "A title")
+
+
+def test_project_picture_is_reduced(session, monkeypatch):
+    monkeypatch.setattr(service, "PROJECT_PICTURE_SIZE", 300)
+    picture, _ = service.project_pictures(session)
+    decoded = cv2.imdecode(np.frombuffer(service.image_bytes_from_upload(picture), np.uint8), cv2.IMREAD_COLOR)
+    assert decoded.shape[:2] == (200, 300)
+
+
+def test_project_settings_are_restored():
+    settings = project_settings({"crop": [0.1, 0, 0.9, 1], "nb_color": 20, "detail": "easy", "print_size": "8x10",
+                                 "paper": "a3", "frame": "walnut", "title": "A title", "subtitle": "A subtitle"})
+    assert settings == {"crop": (0.1, 0.0, 0.9, 1.0), "nb_color": 20, "detail": "easy", "print_size": "8x10",
+                        "paper": "a3", "frame": "walnut", "title": "A title", "subtitle": "A subtitle"}
+    assert project_settings({"print_size": FIT_PAPER})["print_size"] == FIT_PAPER
+
+
+def test_project_settings_ignore_what_the_page_does_not_offer():
+    # The browser storage can be edited by hand, or written by an older version of the page
+    settings = project_settings({"crop": [0, "a", 1, 1], "nb_color": 500, "detail": "extreme", "print_size": ["8x10"],
+                                 "paper": "a0", "frame": "plastic", "title": 3, "subtitle": "x" * 1000})
+    assert settings == {"crop": None, "nb_color": 40, "detail": None, "print_size": no_update, "paper": no_update,
+                        "frame": no_update, "title": "", "subtitle": "x" * 200}
+    assert project_settings({})["nb_color"] is no_update
+    assert project_settings({"nb_color": True})["nb_color"] is no_update
+
+
+def test_saved_projects_list():
+    assert saved_projects(None) is None
+    assert saved_projects([]) is None
+    assert saved_projects([{"name": "no id"}, "junk"]) is None
+    listed = saved_projects([{"id": "a", "name": "First", "thumbnail": "data:image/jpeg;base64,AA"},
+                             {"id": "b", "name": "Second", "thumbnail": "javascript:alert(1)"}])
+    text = str(listed)
+    assert "First" in text and "Second" in text
+    assert "javascript:" not in text

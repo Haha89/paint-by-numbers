@@ -580,3 +580,68 @@ def test_wheel_scrolls_the_page_over_the_3d_preview_and_ctrl_wheel_zooms(page, p
     page.wait_for_timeout(300)
     assert page.evaluate("window.scrollY") == scroll
     assert changed_pixels(before, view.screenshot()) > 0.1
+
+
+def test_save_a_project_and_open_it_after_a_reload(page, picture_path, server_calls):
+    upload(page, picture_path)
+    expect(cards(page)).to_have_count(3)
+    page.locator("#crop-fill").click()
+    expect(page.locator("#crop-status")).to_contain_text("83% of the width")
+    slider = page.get_by_role("slider")
+    slider.focus()
+    slider.press("ArrowLeft")
+    expect(slider).to_have_attribute("aria-valuenow", "29")
+    page.locator("#title").fill("My project")
+    page.locator("#subtitle").fill("A subtitle")
+    choose_print_size(page, "8 x 10 in")
+    expect(page.locator("#generate")).not_to_have_attribute("data-loading", "true")
+    expect(cards(page)).to_have_count(3)
+    cards(page).nth(2).click()
+    expect(cards(page).nth(2)).to_have_class("detail-card selected")
+    page.locator("#frame").click()
+    page.get_by_role("option", name="Walnut").click()
+    page.locator("#save-project").click()
+    expect(page.locator("#project-status")).to_have_text("Project saved in this browser.")
+    # Saving again keeps a single project
+    page.locator("#save-project").click()
+    projects = page.locator(".saved-project")
+    expect(projects).to_have_count(1)
+
+    page.reload()
+    expect(projects).to_have_count(1)
+    expect(projects.first).to_contain_text("My project")
+    projects.first.get_by_role("button", name="Open").click()
+    expect(page.locator("#source-status")).to_contain_text("Project opened: My project")
+    expect(page.locator("#crop-status")).to_contain_text("83% of the width")
+    expect(page.locator("#crop-graph .shapelayer path").first).to_be_attached()
+    expect(page.locator("#title")).to_have_value("My project")
+    expect(page.locator("#subtitle")).to_have_value("A subtitle")
+    expect(page.locator("#print-size")).to_have_value("8 x 10 in (20 x 25 cm)")
+    expect(page.locator("#frame")).to_have_value("Walnut")
+    expect(slider).to_have_attribute("aria-valuenow", "29")
+    expect(cards(page).nth(2)).to_have_class("detail-card selected")
+    wait_until(lambda: server_calls["previews"][0][1] == 29)
+    expect(page.locator("#frame-view")).to_have_attribute("data-rendered", "walnut")
+
+    projects.first.get_by_role("button", name="Delete").click()
+    expect(projects).to_have_count(0)
+    page.reload()
+    expect(page.locator("#upload")).to_be_visible()
+    expect(projects).to_have_count(0)
+
+
+def test_saving_in_a_full_storage_says_so(page, picture_path):
+    # Fill the storage of the page, about 5 MB, with as few keys as possible
+    page.evaluate("""() => {
+        let chunk = "x".repeat(1 << 20);
+        for (let ind = 0; chunk.length; ind++) {
+            try { localStorage.setItem("filler-" + ind, chunk); } catch (problem) { chunk = chunk.slice(0, chunk.length >> 1); }
+        }
+    }""")
+    upload(page, picture_path)
+    page.locator("#save-project").click()
+    expect(page.locator("#project-status")).to_contain_text("no room left")
+    expect(page.locator(".saved-project")).to_have_count(0)
+    assert page.evaluate("Object.keys(localStorage).every((key) => key.startsWith('filler-'))")
+    # A full storage makes closing the browser slow
+    page.evaluate("localStorage.clear()")
