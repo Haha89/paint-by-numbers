@@ -49,6 +49,32 @@ def test_file_which_is_not_a_picture_is_rejected():
         service.save_source(b"not a picture", "notes.txt")
 
 
+def test_huge_picture_is_rejected_before_decoding(monkeypatch):
+    ok, png = cv2.imencode(".png", np.zeros((50, 100, 3), dtype=np.uint8))
+    monkeypatch.setattr(service, "MAX_SOURCE_PIXELS", 4999)
+
+    def no_decoding(*args):
+        raise AssertionError("The picture is decoded")
+
+    monkeypatch.setattr(service.cv2, "imdecode", no_decoding)
+    with pytest.raises(service.ImageError, match="too large"):
+        service.save_source(png.tobytes(), "huge.png")
+
+
+def test_picture_too_large_for_pillow_itself_is_rejected(monkeypatch):
+    ok, png = cv2.imencode(".png", np.zeros((50, 100, 3), dtype=np.uint8))
+    monkeypatch.setattr(service.Image, "MAX_IMAGE_PIXELS", 2000)
+    with pytest.raises(service.ImageError, match="too large"):
+        service.save_source(png.tobytes(), "huge.png")
+
+
+@pytest.mark.parametrize("extension", [".png", ".jpg", ".webp", ".bmp"])
+def test_usual_formats_are_accepted(extension):
+    ok, data = cv2.imencode(extension, np.full((50, 100, 3), 128, dtype=np.uint8))
+    session = service.save_source(data.tobytes(), f"picture{extension}")
+    assert cv2.imread(str(service.source_path(session))).shape[:2] == (50, 100)
+
+
 @pytest.mark.parametrize("name, expected", [("my picture.png", "my_picture"), ("../../evil.png", "evil"),
                                             ("été.jpg", "t"), ("....png", "picture")])
 def test_file_names_are_made_safe(name, expected):

@@ -11,3 +11,6 @@ __pycache__/
 
 # Intermediate steps
 inputs/STEPS/
+
+# Results of the command line, the examples of the README are in docs/examples
+outputs/

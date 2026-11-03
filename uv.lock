@@ -961,6 +961,7 @@ dependencies = [
     { name = "matplotlib" },
     { name = "numpy" },
     { name = "opencv-python" },
+    { name = "pillow" },
     { name = "scikit-learn" },
     { name = "waitress" },
 ]
@@ -979,6 +980,7 @@ requires-dist = [
     { name = "matplotlib", specifier = ">=3.11.2" },
     { name = "numpy", specifier = ">=2.5.4" },
     { name = "opencv-python", specifier = ">=5.0.0.93" },
+    { name = "pillow", specifier = ">=13.0.0" },
     { name = "scikit-learn", specifier = ">=1.9.1" },
     { name = "waitress", specifier = ">=3.0.2" },
 ]
