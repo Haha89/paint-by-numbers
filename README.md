@@ -17,7 +17,7 @@ A quick Python tool to transform any picture in a paint-by-number canvas, using 
 6) Creation of the colormap for the user, sorted by hue and lightness, and of a printable PDF (palette page with the share of the canvas and the estimated paint of each color, then vector canvas page)
 
 # This project includes
-A set of PNG pictures in `./inputs` folder, associated canvas and colormaps in the `./outputs` folder
+A set of pictures in the `./inputs` folder, and examples of results in `./docs/examples`. The command line saves its results in `./outputs`, which git ignores
 The `paint_by_numbers` package, with the class Canvas in `canvas.py` and each step in its own module: `preprocessing.py`, `colors.py`, `regions.py` and `export.py`, and the web interface in `web/`
 
 ### Requirements:
@@ -59,17 +59,17 @@ run `uv run pytest`. The tests run in parallel on up to 8 processes, add `-n 0` 
 ### Result:
 
 #### De Chirico, Place d'Italie, 1922 (20 colors requested, 19 kept after merging the closest ones)
-![De Chirico, Place d'Italie: source, expected result and colormap](outputs/chirico-overview.png)
-![De Chirico, Place d'Italie: canvas](outputs/chirico-canvas.png)
+![De Chirico, Place d'Italie: source, expected result and colormap](docs/examples/chirico-overview.png)
+![De Chirico, Place d'Italie: canvas](docs/examples/chirico-canvas.png)
 
 #### Leonardo da Vinci, Mona Lisa (20 colors requested, 19 kept)
-![Mona Lisa: source, expected result and colormap](outputs/joconde-overview.png)
+![Mona Lisa: source, expected result and colormap](docs/examples/joconde-overview.png)
 
 #### Printable PDFs
 Palette page, then vector canvas page:
-- [Place d'Italie, De Chirico](outputs/chirico.pdf)
-- [Mona Lisa, Leonardo da Vinci](outputs/joconde.pdf)
-- [Paysage](outputs/paysage.pdf)
+- [Place d'Italie, De Chirico](docs/examples/chirico.pdf)
+- [Mona Lisa, Leonardo da Vinci](docs/examples/joconde.pdf)
+- [Paysage](docs/examples/paysage.pdf)
 
 ### Next Steps:
 See the [roadmap](ROADMAP.md).

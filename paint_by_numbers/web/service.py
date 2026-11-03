@@ -9,6 +9,7 @@ never a file path, so it can't point the app at an arbitrary file on the server.
 import base64
 import binascii
 import http.client
+import io
 import ipaddress
 import re
 import shutil
@@ -17,12 +18,14 @@ import tempfile
 import time
 import urllib.request
 import uuid
+import warnings
 import zipfile
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
 import cv2
 import numpy as np
+from PIL import Image
 
 from ..canvas import Canvas
 from ..export import colormap_picture, crowded_label_share
@@ -33,6 +36,9 @@ SESSION_ROOT = Path(tempfile.gettempdir()) / "paint-by-numbers-web"
 # Sessions older than this are deleted when a new picture comes in
 SESSION_TTL_SECONDS = 24 * 3600
 MAX_IMAGE_BYTES = 25 * 1024 * 1024
+# A small file can hold a huge picture, a blank 20000 x 20000 PNG is 1 MB: its size is checked before decoding it.
+# This lets in the 108 megapixel photos of phones, about 330 MB once decoded
+MAX_SOURCE_PIXELS = 120_000_000
 MAX_SOURCE_SIZE = 6000
 URL_TIMEOUT_SECONDS = 10
 # Size of the pictures compared in the detail cards: a full size canvas takes several seconds
@@ -133,6 +139,19 @@ def purge_old_sessions(now):
 
 def save_source(data, name):
     """Check that data is a picture, store it as PNG in a new session folder and return the session id"""
+    too_large = ImageError(f"The picture is too large (max {MAX_SOURCE_PIXELS // 10 ** 6} million pixels).")
+    try:
+        # Pillow only reads the header here. It warns about the large pictures, which are checked just after
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", Image.DecompressionBombWarning)
+            with Image.open(io.BytesIO(data)) as header:
+                width, height = header.size
+    except Image.DecompressionBombError as exc:  # The huge ones, above twice its own limit
+        raise too_large from exc
+    except OSError as exc:
+        raise ImageError("This file is not a supported picture (PNG, JPEG, WebP...).") from exc
+    if width * height > MAX_SOURCE_PIXELS:
+        raise too_large
     picture = cv2.imdecode(np.frombuffer(data, dtype=np.uint8), cv2.IMREAD_COLOR)
     if picture is None:
         raise ImageError("This file is not a supported picture (PNG, JPEG, WebP...).")

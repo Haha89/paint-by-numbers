@@ -8,6 +8,7 @@ dependencies = [
     "matplotlib>=3.11.2",
     "numpy>=2.5.4",
     "opencv-python>=5.0.0.93",
+    "pillow>=13.0.0",
     "scikit-learn>=1.9.1",
     "waitress>=3.0.2",
 ]
