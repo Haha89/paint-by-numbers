@@ -11,7 +11,7 @@ import cv2
 import numpy as np
 import pytest
 
-from paint_by_numbers.web import service
+from paint_by_numbers.web import app as app_module, service
 from dash import no_update
 
 from paint_by_numbers.web.app import (FIT_PAPER, create_app, describe_crowding, describe_print, fill_crop_box, frame_size,
@@ -119,14 +119,20 @@ def test_validate_crop(crop, expected):
     assert service.validate_crop(crop) == expected
 
 
-def test_working_picture_is_cropped(session):
-    path = service.working_picture(session, [0.5, 0, 1, 0.5])
-    assert cv2.imread(str(path)).shape[:2] == (200, 300)
-    assert path.name == service.source_path(session).name
+def test_canvas_is_cropped_in_memory(session):
+    canvas = service.cropped_canvas(session, [0.5, 0, 1, 0.5], 5)
+    assert canvas.src.shape[:2] == (200, 300)
+    assert canvas.namefile == service.source_path(session).stem
+    assert [path.name for path in service.source_path(session).parent.iterdir()] == ["my_picture.png"]
 
 
-def test_working_picture_without_crop_is_the_source(session):
-    assert service.working_picture(session, None) == service.source_path(session)
+def test_canvas_without_crop_is_the_source(session):
+    assert service.cropped_canvas(session, None, 5).src.shape[:2] == (400, 600)
+
+
+def test_thin_picture_gets_its_previews():
+    ok, png = cv2.imencode(".png", np.random.default_rng(0).integers(0, 255, (5, 6000, 3), dtype=np.uint8))
+    assert len(service.render_previews(service.save_source(png.tobytes(), "thin.png"), 5)) == 3
 
 
 def test_previews_compare_the_detail_levels(session):
@@ -239,6 +245,27 @@ def test_picture_is_downloaded_from_a_link(picture_server, path):
 def test_missing_link_is_rejected(picture_server):
     with pytest.raises(service.ImageError, match="can't be downloaded"):
         service.image_bytes_from_url(f"{picture_server[0]}/missing.png")
+
+
+def test_host_resolving_to_a_private_address_on_connection_is_rejected(picture_server, monkeypatch):
+    # The name checked as public, then reaching 127.0.0.1: DNS rebinding
+    monkeypatch.setattr(service, "is_public_host", lambda host: host != "127.0.0.1")
+    monkeypatch.setattr(service, "check_url", lambda url: None)
+    with pytest.raises(service.ImageError, match="can't be reached"):
+        service.image_bytes_from_url(f"{picture_server[0]}/my%20picture.png")
+
+
+def test_slow_download_is_stopped(picture_server, monkeypatch):
+    monkeypatch.setattr(service, "URL_DOWNLOAD_SECONDS", -1)
+    with pytest.raises(service.ImageError, match="too long"):
+        service.image_bytes_from_url(f"{picture_server[0]}/my%20picture.png")
+
+
+def test_too_large_request_is_refused():
+    client = create_app().server.test_client()
+    response = client.post("/_dash-update-component", data=b"x" * (app_module.MAX_REQUEST_BYTES + 1),
+                           content_type="application/json")
+    assert response.status_code == 413
 
 
 def test_too_large_download_is_rejected(picture_server, monkeypatch):

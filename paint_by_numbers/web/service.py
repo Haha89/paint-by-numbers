@@ -15,6 +15,7 @@ import re
 import shutil
 import socket
 import tempfile
+import threading
 import time
 import urllib.request
 import uuid
@@ -41,6 +42,10 @@ MAX_IMAGE_BYTES = 25 * 1024 * 1024
 MAX_SOURCE_PIXELS = 120_000_000
 MAX_SOURCE_SIZE = 6000
 URL_TIMEOUT_SECONDS = 10
+# The whole download, as the timeout above only applies to each read: a server sending a byte at a time stops here
+URL_DOWNLOAD_SECONDS = 60
+# Canvases generated at the same time, the others wait: each takes seconds of CPU and hundreds of MB
+HEAVY_WORK = threading.BoundedSemaphore(2)
 # Size of the pictures compared in the detail cards: a full size canvas takes several seconds
 PREVIEW_SIZE = 1200
 # Largest dimension of the final pictures shown in the page, the downloads keep their full size
@@ -100,21 +105,60 @@ class PublicRedirectHandler(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
+class PublicPeer:
+    """Check the address a connection really reaches, as the host name can resolve to another address than the one
+    check_url saw (DNS rebinding)
+
+    shortcut: a proxy on the local network is refused too, allow it if the app ever runs behind one
+    """
+
+    def connect(self):
+        super().connect()
+        if not is_public_host(self.sock.getpeername()[0]):
+            self.close()
+            raise ImageError("This link points to an address which can't be reached.")
+
+
+class PublicHTTPConnection(PublicPeer, http.client.HTTPConnection):
+    pass
+
+
+class PublicHTTPSConnection(PublicPeer, http.client.HTTPSConnection):
+    pass
+
+
+class PublicHTTPHandler(urllib.request.HTTPHandler):
+    def http_open(self, req):
+        return self.do_open(PublicHTTPConnection, req)
+
+
+class PublicHTTPSHandler(urllib.request.HTTPSHandler):
+    def https_open(self, req):
+        return self.do_open(PublicHTTPSConnection, req, context=self._context)
+
+
 def image_bytes_from_url(url):
-    """Download a picture from an http(s) link, up to MAX_IMAGE_BYTES"""
+    """Download a picture from an http(s) link, up to MAX_IMAGE_BYTES and URL_DOWNLOAD_SECONDS"""
     url = url.strip()
     check_url(url)
     request = urllib.request.Request(url, headers={"User-Agent": "paint-by-numbers/0.1"})
+    opener = urllib.request.build_opener(PublicRedirectHandler, PublicHTTPHandler, PublicHTTPSHandler)
+    deadline = time.monotonic() + URL_DOWNLOAD_SECONDS
+    data = bytearray()
     try:
-        with urllib.request.build_opener(PublicRedirectHandler).open(request, timeout=URL_TIMEOUT_SECONDS) as response:
-            data = response.read(MAX_IMAGE_BYTES + 1)
+        with opener.open(request, timeout=URL_TIMEOUT_SECONDS) as response:
+            # read1 returns what has arrived, rather than waiting for the whole chunk
+            while len(data) <= MAX_IMAGE_BYTES and (chunk := response.read1(64 * 1024)):
+                data += chunk
+                if time.monotonic() > deadline:
+                    raise ImageError("The picture takes too long to download.")
     except ImageError:
         raise
     except (OSError, ValueError, http.client.HTTPException) as exc:
         raise ImageError("The picture can't be downloaded from this link.") from exc
     if len(data) > MAX_IMAGE_BYTES:
         raise ImageError(f"The picture is too large (max {MAX_IMAGE_BYTES // 2 ** 20} MB).")
-    return data
+    return bytes(data)
 
 
 def name_from_url(url):
@@ -226,21 +270,13 @@ def validate_crop(crop):
     return left, top, right, bottom
 
 
-def working_picture(session_id, crop):
-    """The picture to build from: the source, or a cropped copy keeping its name"""
-    path = source_path(session_id)
+def cropped_canvas(session_id, crop, nb_color, **options):
+    """The canvas of the source picture, cropped in memory: requests running at the same time don't share any file"""
+    canvas = Canvas(source_path(session_id), nb_color, **options)
     crop = validate_crop(crop)
-    if crop is None:
-        return path
-    picture = cv2.imread(str(path))
-    height, width = picture.shape[:2]
-    left, top, right, bottom = crop
-    cropped = picture[round(top * height):round(bottom * height), round(left * width):round(right * width)]
-    target = path.parent / "cropped" / path.name
-    target.parent.mkdir(exist_ok=True)
-    if not cv2.imwrite(str(target), cropped):
-        raise ImageError("The picture can't be cropped.")
-    return target
+    if crop is not None:
+        canvas.crop(crop)
+    return canvas
 
 
 def crowded_labels(canvas):
@@ -263,11 +299,11 @@ def crowded_labels(canvas):
 
 def render_previews(session_id, nb_color, crop=None):
     """Generate the picture once per detail level, at a low resolution, and return what the detail cards show"""
-    path = working_picture(session_id, crop)
     previews = []
     for detail in Canvas.detail_levels:
-        canvas = Canvas(path, nb_color, pixel_size=PREVIEW_SIZE, detail=detail)
-        canvas.generate()
+        canvas = cropped_canvas(session_id, crop, nb_color, pixel_size=PREVIEW_SIZE, detail=detail)
+        with HEAVY_WORK:
+            canvas.generate()
         previews.append({"detail": detail, "description": DETAIL_DESCRIPTIONS[detail],
                          "image": data_uri(canvas.quantified_image), "regions": len(canvas.regions),
                          "colors": len(canvas.colormap), "crowded": crowded_labels(canvas)})
@@ -277,8 +313,9 @@ def render_previews(session_id, nb_color, crop=None):
 def build_files(session_id, detail, nb_color, crop=None, pixel_size=4000, title=None, subtitle="", paper="a4",
                 print_size=None):
     """Generate the canvas at full size, save its files and their ZIP in the session and return what the page shows"""
-    canvas = Canvas(working_picture(session_id, crop), nb_color, pixel_size=pixel_size, detail=detail)
-    canvas.generate()
+    canvas = cropped_canvas(session_id, crop, nb_color, pixel_size=pixel_size, detail=detail)
+    with HEAVY_WORK:
+        canvas.generate()
     build = source_path(session_id).parent / "build"
     canvas.save(build, title=title, subtitle=subtitle, paper=paper, print_size=print_size)
     with zipfile.ZipFile(build / f"{canvas.namefile}.zip", "w", zipfile.ZIP_DEFLATED) as archive:
