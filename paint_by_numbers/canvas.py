@@ -107,11 +107,16 @@ class Canvas:
         self.colormap = []
         self.coverage = []
 
+    def crop(self, box):
+        """Keep only a (left, top, right, bottom) box of the source, as fractions, to call before generate"""
+        height, width = self.src.shape[:2]
+        left, top, right, bottom = box
+        self.src = self.src[round(top * height):round(bottom * height), round(left * width):round(right * width)]
+
     def crop_to_print(self, print_size):
         """Crop the source around its center to the shape of a standard canvas size, to call before generate"""
         height, width = self.src.shape[:2]
-        left, top, right, bottom = fill_crop(width, height, print_size)
-        self.src = self.src[round(top * height):round(bottom * height), round(left * width):round(right * width)]
+        self.crop(fill_crop(width, height, print_size))
 
     def generate(self):
         """Main function, computes the expected result, the canvas and the colormap"""

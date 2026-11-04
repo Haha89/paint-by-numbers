@@ -34,6 +34,7 @@ IMPORT_MAP = '<script type="importmap">{"imports": {"three": "/assets/vendor/thr
 CROWDED_WARNING = 0.25
 # Longest title or subtitle kept from a saved project
 MAX_TEXT_LENGTH = 200
+MAX_REQUEST_BYTES = service.MAX_IMAGE_BYTES * 4 // 3 + 5 * 2 ** 20
 
 
 def step(number, title, subtitle, *children):
@@ -378,6 +379,8 @@ def create_app():
     """The Dash application"""
     app = Dash(__name__, title="Paint by numbers", assets_ignore=THREE_FILES)
     app.index_string = app.index_string.replace("{%metas%}", "{%metas%}" + IMPORT_MAP)
+    # An upload comes in base64, a third larger, inside the request: a larger body is refused before being read
+    app.server.config["MAX_CONTENT_LENGTH"] = MAX_REQUEST_BYTES
     app.layout = layout()
 
     @app.callback(
@@ -562,8 +565,12 @@ def create_app():
             built = service.build_files(source["session"], detail, settings["nb_color"], settings["crop"],
                                         title=title or Path(source["name"]).stem, subtitle=subtitle or "", paper=paper,
                                         print_size=None if print_size == FIT_PAPER else print_size)
-        except (ValueError, OSError) as exc:
+        except ValueError as exc:
             return error(str(exc))
+        except OSError:
+            # Its message can hold paths of the server, kept for the log
+            app.server.logger.exception("The canvas can't be built")
+            return error("The canvas can't be built, please try again.")
         return build_result(built, source["session"])
 
     # The browser storage is only touched in the page, see assets/projects.js

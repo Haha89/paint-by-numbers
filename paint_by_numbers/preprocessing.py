@@ -7,9 +7,10 @@ import cv2
 def target_dim(shape, size):
     """Returns the (width, height) whose largest dimension matches size, respecting the picture ratio"""
     (height, width) = shape[:2]
+    # At least 1 pxl, which a very thin picture would round down to 0
     if height > width:  # portrait mode
-        return int(width * size / float(height)), size
-    return size, int(height * size / float(width))
+        return max(1, int(width * size / float(height))), size
+    return size, max(1, int(height * size / float(width)))
 
 
 def resize(picture, size):
